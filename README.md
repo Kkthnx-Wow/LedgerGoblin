@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="Media/Logo.png" alt="LedgerGoblin" width="160" height="160" />
+<img src="LedgerGoblin/Media/Logo.png" alt="LedgerGoblin" width="160" height="160" />
 
 # LedgerGoblin
 
