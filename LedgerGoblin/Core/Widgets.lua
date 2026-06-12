@@ -44,10 +44,14 @@ end
 
 --- Initializer that renders `text` as a wrapped paragraph for layout:AddInitializer.
 function F.CreateSettingsDescription(text)
-	if not (Settings and Settings.CreateElementInitializer) then return end
+	if not (Settings and Settings.CreateElementInitializer) then
+		return
+	end
 	local initializer = Settings.CreateElementInitializer("LedgerGoblinSettingsDescriptionTemplate", { text = text })
 	local height = MeasureDescriptionHeight(text)
-	initializer.GetExtent = function() return height end
+	initializer.GetExtent = function()
+		return height
+	end
 	return initializer
 end
 
@@ -139,7 +143,9 @@ function LedgerGoblinSettingsEditBoxMixin:Init(initializer)
 	-- Drop the box below the (possibly wrapped) description, derived from the
 	-- measured height (anchoring to the description's BOTTOMLEFT is unreliable).
 	local descHeight = self.Description:GetStringHeight()
-	if not descHeight or descHeight <= 0 then descHeight = 12 end
+	if not descHeight or descHeight <= 0 then
+		descHeight = 12
+	end
 	self.EditBox:ClearAllPoints()
 	self.EditBox:SetPoint("TOPLEFT", self.Text, "BOTTOMLEFT", 6, -(descHeight + 11))
 	self.EditBox:SetWidth((data and data.width) or 180)
@@ -158,7 +164,9 @@ end
 --- getValue/setValue, so it can read/write any saved field (we use it for money,
 --- parsing g/s/c on commit).
 function F.CreateSettingsEditBox(name, tooltip, getValue, setValue, width)
-	if not (Settings and Settings.CreateElementInitializer) then return end
+	if not (Settings and Settings.CreateElementInitializer) then
+		return
+	end
 	local initializer = Settings.CreateElementInitializer("LedgerGoblinSettingsEditBoxTemplate", {
 		name = name,
 		tooltip = tooltip,
@@ -166,6 +174,8 @@ function F.CreateSettingsEditBox(name, tooltip, getValue, setValue, width)
 		setValue = setValue,
 		width = width or 180,
 	})
-	initializer.GetExtent = function() return 74 end
+	initializer.GetExtent = function()
+		return 74
+	end
 	return initializer
 end

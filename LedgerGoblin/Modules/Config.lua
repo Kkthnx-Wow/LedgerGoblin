@@ -364,10 +364,7 @@ local function ShowTargetMenu(owner, box)
 		local Roster = ns:GetModule("Roster")
 		local list = Roster.List(false)
 		if #list == 0 then
-			root:CreateButton(
-				L["No known characters yet. Log into an alt once so LedgerGoblin can see it."],
-				function() end
-			)
+			root:CreateButton(L["No known characters yet. Log into an alt once so LedgerGoblin can see it."], function() end)
 			return
 		end
 		for i = 1, #list do
@@ -622,8 +619,7 @@ local function FillRuleRows(holder, rules)
 				row.text:SetText(matchText .. RULE_ARROW .. TargetColored(target))
 				row.text:SetTextColor(1, 1, 1)
 			else
-				local matchText = link and (PlainText(link) .. format(" (%d)", rule.match))
-					or format(L["[%d]"], rule.match)
+				local matchText = link and (PlainText(link) .. format(" (%d)", rule.match)) or format(L["[%d]"], rule.match)
 				row.text:SetText(format("%s  ->  %s", matchText, target ~= "" and target or "?"))
 				row.text:SetTextColor(0.5, 0.5, 0.5)
 			end
@@ -949,11 +945,7 @@ end
 -- into `frame`, anchored below `anchorTop`. Sets frame.ruleListHolder (rule rows)
 -- and frame.exclHolder (exclusion chips) for RefreshRuleEditor. Shared by window.
 local function BuildEditorContent(frame, anchorTop)
-	local desc = CreateLabel(
-		frame,
-		L["Rules refresh when you add or remove entries. Targets must be known characters on this account before the engine will send. Priority: specific item, then bind type, then quality."],
-		"GameFontHighlight"
-	)
+	local desc = CreateLabel(frame, L["Rules refresh when you add or remove entries. Targets must be known characters on this account before the engine will send. Priority: specific item, then bind type, then quality."], "GameFontHighlight")
 	desc:SetPoint("TOPLEFT", anchorTop, "BOTTOMLEFT", 0, -8)
 	desc:SetPoint("RIGHT", frame, "RIGHT", -16, 0)
 	desc:SetJustifyH("LEFT")
@@ -969,8 +961,7 @@ local function BuildEditorContent(frame, anchorTop)
 	rulesHeader:SetPoint("TOPLEFT", 12, -10)
 	rulesHeader:SetTextColor(1, 0.82, 0)
 
-	local tip =
-		CreateLabel(rulesInset, L["Tip: shift-click or drag an item here to fill its ID."], "GameFontDisableSmall")
+	local tip = CreateLabel(rulesInset, L["Tip: shift-click or drag an item here to fill its ID."], "GameFontDisableSmall")
 	tip:SetPoint("TOPRIGHT", -12, -12)
 
 	local matchInput = CreateInput(rulesInset, 150)
@@ -1008,11 +999,7 @@ local function BuildEditorContent(frame, anchorTop)
 		addRule:Click()
 	end)
 
-	local listLabel = CreateLabel(
-		rulesInset,
-		L["Your routes - tick to enable, set keep to hold some back, x to remove:"],
-		"GameFontDisableSmall"
-	)
+	local listLabel = CreateLabel(rulesInset, L["Your routes - tick to enable, set keep to hold some back, x to remove:"], "GameFontDisableSmall")
 	listLabel:SetPoint("TOPLEFT", addRule, "BOTTOMLEFT", 0, -12)
 
 	-- Scrollable viewport for the pooled rule rows. FillRuleRows lays rows out
@@ -1032,8 +1019,7 @@ local function BuildEditorContent(frame, anchorTop)
 	exclHeader:SetPoint("TOPLEFT", 12, -10)
 	exclHeader:SetTextColor(1, 0.82, 0)
 
-	local exclTip =
-		CreateLabel(exclInset, L["Tip: shift-click or drag an item here to fill its ID."], "GameFontDisableSmall")
+	local exclTip = CreateLabel(exclInset, L["Tip: shift-click or drag an item here to fill its ID."], "GameFontDisableSmall")
 	exclTip:SetPoint("TOPRIGHT", -12, -12)
 
 	local exclInput = CreateInput(exclInset, 150)
@@ -1160,11 +1146,7 @@ local function CreateRuleLauncher()
 	local title = CreateLabel(frame, L["Rule Editor"], "GameFontHighlightHuge")
 	title:SetPoint("TOPLEFT", 16, -16)
 
-	local desc = CreateLabel(
-		frame,
-		L["Per-item routing opens in its own movable window so you can keep your bags open and drag items straight in (Blizzard won't show bags while this Settings panel is open)."],
-		"GameFontHighlight"
-	)
+	local desc = CreateLabel(frame, L["Per-item routing opens in its own movable window so you can keep your bags open and drag items straight in (Blizzard won't show bags while this Settings panel is open)."], "GameFontHighlight")
 	desc:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
 	desc:SetPoint("RIGHT", frame, "RIGHT", -16, 0)
 	desc:SetJustifyH("LEFT")
@@ -1204,10 +1186,7 @@ local function BuildPanel()
 
 	-- Intro: one paragraph that explains the whole addon before any control.
 	AddHeader(layout, C.Title)
-	AddDesc(
-		layout,
-		L["LedgerGoblin sends gold and items to your alts by rule. Set up routes below, open a mailbox, and click Send (or let it run automatically). Use the Rule Editor for per-item routes; type /ledger for all commands."]
-	)
+	AddDesc(layout, L["LedgerGoblin sends gold and items to your alts by rule. Set up routes below, open a mailbox, and click Send (or let it run automatically). Use the Rule Editor for per-item routes; type /ledger for all commands."])
 
 	-- General. Visible label = the setting's name (kept short so it isn't cut
 	-- off); the full sentence rides along as the hover tooltip + description.
@@ -1217,8 +1196,7 @@ local function BuildPanel()
 		Settings.CreateCheckbox(category, s, L["Auto-run when the mailbox opens"])
 		AddDesc(layout, L["Open the mailbox and LedgerGoblin sends everything your rules match, automatically."])
 
-		local s2 =
-			Bind("LG_holdShift", db, "holdShiftToDisable", D.holdShiftToDisable, L["Hold Shift to skip auto-run"])
+		local s2 = Bind("LG_holdShift", db, "holdShiftToDisable", D.holdShiftToDisable, L["Hold Shift to skip auto-run"])
 		Settings.CreateCheckbox(category, s2, L["Hold Shift to skip auto-run"])
 
 		local sConfirm = Bind("LG_confirm", db, "confirmThreshold", D.confirmThreshold, L["Confirm large sends"])
@@ -1261,22 +1239,16 @@ local function BuildPanel()
 
 		-- KEEP / FIXED amounts as g/s/c money boxes; only the active mode's box
 		-- shows. PERCENT stays a slider (it's a 0-100 value, not money).
-		local keepBox = F.CreateSettingsEditBox(
-			L["Amount to keep here"],
-			L["Amount left on this character; the remainder is sent. Type like 1000g 50s 20c."],
-			function()
-				return F.MoneyText(g.keepCopper)
-			end,
-			function(text)
-				local c = F.ParseMoney(text)
-				if c then
-					g.keepCopper = c
-				else
-					F.Print(L["That amount isn't valid. Try a number, or 100g 50s 20c."])
-				end
-			end,
-			200
-		)
+		local keepBox = F.CreateSettingsEditBox(L["Amount to keep here"], L["Amount left on this character; the remainder is sent. Type like 1000g 50s 20c."], function()
+			return F.MoneyText(g.keepCopper)
+		end, function(text)
+			local c = F.ParseMoney(text)
+			if c then
+				g.keepCopper = c
+			else
+				F.Print(L["That amount isn't valid. Try a number, or 100g 50s 20c."])
+			end
+		end, 200)
 		if keepBox then
 			layout:AddInitializer(keepBox)
 			DependsOn(keepBox, enableInit, function(enabled)
@@ -1284,22 +1256,16 @@ local function BuildPanel()
 			end)
 		end
 
-		local fixedBox = F.CreateSettingsEditBox(
-			L["Amount to send"],
-			L["Exact amount sent each run. Type like 100g 50s 20c."],
-			function()
-				return F.MoneyText(g.fixedCopper)
-			end,
-			function(text)
-				local c = F.ParseMoney(text)
-				if c then
-					g.fixedCopper = c
-				else
-					F.Print(L["That amount isn't valid. Try a number, or 100g 50s 20c."])
-				end
-			end,
-			200
-		)
+		local fixedBox = F.CreateSettingsEditBox(L["Amount to send"], L["Exact amount sent each run. Type like 100g 50s 20c."], function()
+			return F.MoneyText(g.fixedCopper)
+		end, function(text)
+			local c = F.ParseMoney(text)
+			if c then
+				g.fixedCopper = c
+			else
+				F.Print(L["That amount isn't valid. Try a number, or 100g 50s 20c."])
+			end
+		end, 200)
 		if fixedBox then
 			layout:AddInitializer(fixedBox)
 			DependsOn(fixedBox, enableInit, function(enabled)
@@ -1328,10 +1294,7 @@ local function BuildPanel()
 
 	-- Bind-based routing (BoE / account-bound). More specific than quality.
 	AddHeader(layout, L["Bind Routing"])
-	AddDesc(
-		layout,
-		L["Route by how an item binds. Bind on Equip gear is sent while still unequipped; account-bound items go to your own alts. These win over quality rules."]
-	)
+	AddDesc(layout, L["Route by how an item binds. Bind on Equip gear is sent while still unequipped; account-bound items go to your own alts. These win over quality rules."])
 	for i = 1, #C.BINDS do
 		local b = C.BINDS[i]
 		local tbl = db.bind[b.key]
@@ -1356,14 +1319,11 @@ local function BuildPanel()
 		local qc = C.QualityColors and C.QualityColors[q.enum]
 		local coloured = qc and (qc.hex .. q.label .. "|r") or q.label
 
-		local sEnable =
-			Bind("LG_q_" .. q.key .. "_en", tbl, "enabled", def.enabled, format(L["Route %s items"], coloured))
+		local sEnable = Bind("LG_q_" .. q.key .. "_en", tbl, "enabled", def.enabled, format(L["Route %s items"], coloured))
 		local enableInit = Settings.CreateCheckbox(category, sEnable, format(L["Route %s items"], coloured))
 
-		local sTarget =
-			Bind("LG_q_" .. q.key .. "_tg", tbl, "target", def.target, format(L["Send %s items to"], coloured))
-		local targetInit =
-			Settings.CreateDropdown(category, sTarget, TargetOptions, format(L["Send %s items to"], coloured))
+		local sTarget = Bind("LG_q_" .. q.key .. "_tg", tbl, "target", def.target, format(L["Send %s items to"], coloured))
+		local targetInit = Settings.CreateDropdown(category, sTarget, TargetOptions, format(L["Send %s items to"], coloured))
 		DependsOn(targetInit, enableInit)
 	end
 
@@ -1416,13 +1376,7 @@ end
 local function RulesButton_OnEnter(self)
 	GameTooltip:SetOwner(self, "ANCHOR_TOP")
 	GameTooltip:AddLine(L["Rules"])
-	GameTooltip:AddLine(
-		L["Open the Rule Editor window. Drag or shift-click items from your bags to route them."],
-		0.8,
-		0.8,
-		0.8,
-		true
-	)
+	GameTooltip:AddLine(L["Open the Rule Editor window. Drag or shift-click items from your bags to route them."], 0.8, 0.8, 0.8, true)
 	GameTooltip:Show()
 end
 

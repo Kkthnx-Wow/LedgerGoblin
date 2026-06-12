@@ -226,7 +226,9 @@ function Logger.PrintStats()
 	for target in pairs(life) do
 		targets[#targets + 1] = target
 	end
-	sort(targets, function(a, b) return life[a].copper > life[b].copper end)
+	sort(targets, function(a, b)
+		return life[a].copper > life[b].copper
+	end)
 	for i = 1, #targets do
 		local target = targets[i]
 		F.Print(L["  %s: %d item(s), %s"], target, life[target].items, F.Money(life[target].copper))

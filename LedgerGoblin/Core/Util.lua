@@ -122,9 +122,15 @@ function F.MoneyText(copper)
 	local s = floor((copper % COPPER_PER_GOLD) / COPPER_PER_SILVER)
 	local c = copper % COPPER_PER_SILVER
 	local parts = {}
-	if g > 0 then parts[#parts + 1] = g .. "g" end
-	if s > 0 then parts[#parts + 1] = s .. "s" end
-	if c > 0 or #parts == 0 then parts[#parts + 1] = c .. "c" end
+	if g > 0 then
+		parts[#parts + 1] = g .. "g"
+	end
+	if s > 0 then
+		parts[#parts + 1] = s .. "s"
+	end
+	if c > 0 or #parts == 0 then
+		parts[#parts + 1] = c .. "c"
+	end
 	return table.concat(parts, " ")
 end
 

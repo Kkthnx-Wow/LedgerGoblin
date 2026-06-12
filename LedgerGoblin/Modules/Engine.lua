@@ -535,7 +535,9 @@ end
 
 -- Print accumulated BuildPlan warnings (used by Run/Preview, not by hover).
 local function FlushWarnings(warnings)
-	if not warnings then return end
+	if not warnings then
+		return
+	end
 	for i = 1, #warnings do
 		F.Print(warnings[i])
 	end
@@ -561,11 +563,7 @@ end
 local function EnsureSendTab()
 	local MailFrame = _G["MailFrame"]
 	local tab = _G["MailFrameTab2"]
-	local selectedTab = MailFrame and (
-		(PanelTemplates_GetSelectedTab and PanelTemplates_GetSelectedTab(MailFrame))
-		or MailFrame.selectedTab
-		or MailFrame.activeTab
-	)
+	local selectedTab = MailFrame and ((PanelTemplates_GetSelectedTab and PanelTemplates_GetSelectedTab(MailFrame)) or MailFrame.selectedTab or MailFrame.activeTab)
 	if MailFrame and tab and tab.Click and selectedTab ~= 2 then
 		tab:Click()
 		return true
@@ -897,8 +895,7 @@ function Engine.Debug()
 	local db = ns.db
 	local Roster = ns:GetModule("Roster")
 	local me = ns.State.playerName
-	F.Print(L["Debug - you are |cffffd200%s|r | HasAnyRule=%s | mailbox=%s"],
-		tostring(me), tostring(Engine.HasAnyRule()), tostring(ns.State.mailboxOpen))
+	F.Print(L["Debug - you are |cffffd200%s|r | HasAnyRule=%s | mailbox=%s"], tostring(me), tostring(Engine.HasAnyRule()), tostring(ns.State.mailboxOpen))
 
 	local shown, mailableTotal, routedTotal, lockedTotal = 0, 0, 0, 0
 	for bag = 0, LastBag() do
@@ -919,10 +916,7 @@ function Engine.Debug()
 						routedTotal = routedTotal + 1
 						if shown < DEBUG_ITEM_CAP then
 							shown = shown + 1
-							F.Print(L["%s q=%s bind=%s locked=%s -> %s"],
-								info.hyperlink or tostring(info.itemID),
-								tostring(info.quality), tostring(bindType),
-								tostring(info.isLocked), target)
+							F.Print(L["%s q=%s bind=%s locked=%s -> %s"], info.hyperlink or tostring(info.itemID), tostring(info.quality), tostring(bindType), tostring(info.isLocked), target)
 						end
 					end
 				end
@@ -948,10 +942,7 @@ function Engine.Debug()
 	if issecret and issecret(cur) then
 		F.Print(L["Debug - gold value is secret right now (in combat?)."])
 	else
-		F.Print(L["Debug - gold enabled=%s target=%s known=%s self=%s | have %s, keep %s"],
-			tostring(g.enabled), g.target ~= "" and g.target or "(none)",
-			tostring(Roster.IsKnown(g.target)), tostring(g.target == me),
-			F.Money(cur), F.Money(g.keepCopper))
+		F.Print(L["Debug - gold enabled=%s target=%s known=%s self=%s | have %s, keep %s"], tostring(g.enabled), g.target ~= "" and g.target or "(none)", tostring(Roster.IsKnown(g.target)), tostring(g.target == me), F.Money(cur), F.Money(g.keepCopper))
 	end
 end
 
