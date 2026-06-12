@@ -1,0 +1,41 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+	<!--
+		Wrapped description paragraph for the vertical Settings layout. Built via
+		F.CreateSettingsDescription(text); height comes from the initializer's
+		GetExtent (see Widgets.lua).
+	-->
+	<Frame name="LedgerGoblinSettingsDescriptionTemplate" virtual="true" mixin="LedgerGoblinSettingsDescriptionMixin">
+		<Layers>
+			<Layer level="ARTWORK">
+				<FontString parentKey="Text" inherits="GameFontHighlightSmall" justifyH="LEFT" justifyV="TOP">
+					<Anchors>
+						<Anchor point="TOPLEFT" x="8" y="-4"/>
+						<Anchor point="BOTTOMRIGHT" x="-26" y="4"/>
+					</Anchors>
+				</FontString>
+			</Layer>
+		</Layers>
+	</Frame>
+
+	<!--
+		Inline edit box row. The EditBox itself is created in Lua so it can use the
+		standard InputBoxTemplate and re-anchor under the wrapped description.
+	-->
+	<Frame name="LedgerGoblinSettingsEditBoxTemplate" virtual="true" mixin="LedgerGoblinSettingsEditBoxMixin">
+		<Layers>
+			<Layer level="ARTWORK">
+				<FontString parentKey="Text" inherits="GameFontNormal" justifyH="LEFT" justifyV="TOP">
+					<Anchors>
+						<Anchor point="TOPLEFT" x="28" y="-4"/>
+					</Anchors>
+				</FontString>
+				<FontString parentKey="Description" inherits="GameFontHighlightSmall" justifyH="LEFT" justifyV="TOP">
+					<Anchors>
+						<Anchor point="TOPLEFT" relativeKey="$parent.Text" relativePoint="BOTTOMLEFT" x="0" y="-3"/>
+						<Anchor point="RIGHT" x="-26"/>
+					</Anchors>
+				</FontString>
+			</Layer>
+		</Layers>
+	</Frame>
+</Ui>
