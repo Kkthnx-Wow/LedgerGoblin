@@ -13,9 +13,17 @@ local addonName, ns = ...
 -- reach for a global to talk to each other.
 ns.name = addonName
 ns.C = {} -- Constants
-ns.L = {} -- Locale strings
 ns.F = {} -- Functions / helpers
 ns.Modules = {} -- Registered module handles (by name)
+
+-- Locale strings. Our keys ARE the enUS sentences, so a missing key (typo, or a
+-- not-yet-translated string in another locale) falls back to the key itself -
+-- degrading to readable English instead of erroring inside format()/concat.
+ns.L = setmetatable({}, {
+	__index = function(_, key)
+		return key
+	end,
+})
 
 -- Read-only-ish runtime state. Populated during login; treated as the single
 -- source of truth for "who am I and what's going on right now".

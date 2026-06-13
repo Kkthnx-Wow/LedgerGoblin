@@ -189,8 +189,7 @@ function F.MailRecipient(target)
 	if not name then
 		return target -- already a bare name, nothing to strip
 	end
-	local myRealm = (GetNormalizedRealmName and GetNormalizedRealmName())
-		or (GetRealmName and GetRealmName():gsub("%s+", "")) or ""
+	local myRealm = (GetNormalizedRealmName and GetNormalizedRealmName()) or (GetRealmName and GetRealmName():gsub("%s+", "")) or ""
 	if myRealm ~= "" and realm:lower() == myRealm:lower() then
 		return name
 	end

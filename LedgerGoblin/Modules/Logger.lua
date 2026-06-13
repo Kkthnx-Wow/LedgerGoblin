@@ -18,6 +18,27 @@ local Logger = ns:NewModule("Logger")
 local format = string.format
 local floor = math.floor
 local sort = table.sort
+local date = date
+local time = time
+
+-- Cap on how many days of per-day analytics we keep. Unlike the ring log, the
+-- analytics table has no natural bound, so left alone it grows in SavedVariables
+-- forever. Day keys are "YYYY-MM-DD" (lexicographically sortable), so anything
+-- older than the cutoff key can be dropped with a plain string compare.
+local ANALYTICS_MAX_DAYS = 90
+
+local function PruneAnalytics()
+	local analytics = ns.global and ns.global.analytics
+	if not analytics then
+		return
+	end
+	local cutoff = date("%Y-%m-%d", time() - ANALYTICS_MAX_DAYS * 86400)
+	for dayKey in pairs(analytics) do
+		if dayKey < cutoff then
+			analytics[dayKey] = nil
+		end
+	end
+end
 
 -- "5s/3m/2h/4d ago" - compact relative time for the transfer log.
 local function FormatAgo(when)
@@ -75,6 +96,9 @@ function Logger.RecordMail(target, copper, itemList)
 	if not day then
 		day = {}
 		ns.global.analytics[dayKey] = day
+		-- A new day rolled over: trim anything past the retention window. Only
+		-- runs once per day, so the full-table scan is cheap.
+		PruneAnalytics()
 	end
 	local agg = day[target]
 	if not agg then
@@ -221,6 +245,10 @@ function Logger.PrintStats()
 
 	F.Print(L["LedgerGoblin stats"])
 	F.Print(L["Lifetime: %d item(s), %s."], lifeItems, F.Money(lifeCopper))
+	local sent = (ns.global and ns.global.sendCount) or 0
+	if sent > 0 then
+		F.Print(L["Mails sent (lifetime): %d."], sent)
+	end
 
 	local targets = {}
 	for target in pairs(life) do

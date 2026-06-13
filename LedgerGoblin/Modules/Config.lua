@@ -21,6 +21,9 @@ local tostring = tostring
 local tonumber = tonumber
 local gsub = string.gsub
 local wipe = wipe
+local type = type
+local pairs = pairs
+local tablesort = table.sort
 
 local CreateFrame = CreateFrame
 
@@ -206,29 +209,64 @@ local function ItemIDFromLink(link)
 	return link:match("|Hitem:(%d+)") or link:match("^item:(%d+)")
 end
 
--- Retail's default ChatEdit_InsertLink only deigns to feed chat and a handful of
--- blessed edit boxes, so a shift-clicked item simply ghosts our custom box. A
--- secure post-hook (taint-free; the battle-tested Ace3/PhanxConfig pattern)
--- routes the link to whichever of our boxes is visible and focused.
+-- Shift-clicking a *stack* also makes Blizzard open the split-count slider. We
+-- can't stop that from a post-hook (it can't change the click's return), so once
+-- we've captured the link we close the slider and drop the cursor on the next
+-- frame (it opens after our hook runs).
+local function DismissStackSplit()
+	ns:After(0, function()
+		local split = _G["StackSplitFrame"]
+		if split and split:IsShown() and split.Hide then
+			split:Hide()
+		end
+		if ClearCursor then
+			ClearCursor()
+		end
+	end)
+end
+
+-- Feed a shift-clicked / inserted link into whichever of our boxes is visible and
+-- focused. Returns true if one consumed it, so callers can stop early.
+local function FeedFocusedBox(link)
+	if type(link) ~= "string" then
+		return false
+	end
+	for i = 1, #wiredItemBoxes do
+		local box = wiredItemBoxes[i]
+		if box:IsVisible() and box:HasFocus() then
+			local id = ItemIDFromLink(link)
+			box:SetText(id or link)
+			box:SetCursorPosition(box:GetText():len())
+			DismissStackSplit()
+			return true
+		end
+	end
+	return false
+end
+
+-- Shift-clicking a bag item routes through HandleModifiedItemClick on this client
+-- (Midnight no longer exposes ChatEdit_InsertLink), so that's the reliable entry
+-- point - it fires for EVERY modified click, hence the focus guard inside
+-- FeedFocusedBox. ChatEdit_InsertLink is hooked too, but only where it still
+-- exists (older flavors), so a paste/insert path also lands in our box. Both are
+-- secure post-hooks (taint-free; the battle-tested Ace3/PhanxConfig pattern).
 local function InstallLinkHook()
 	if linkHookInstalled or type(hooksecurefunc) ~= "function" then
 		return
 	end
 	linkHookInstalled = true
-	hooksecurefunc("ChatEdit_InsertLink", function(link)
-		if type(link) ~= "string" then
-			return
-		end
-		for i = 1, #wiredItemBoxes do
-			local box = wiredItemBoxes[i]
-			if box:IsVisible() and box:HasFocus() then
-				local id = ItemIDFromLink(link)
-				box:SetText(id or link)
-				box:SetCursorPosition(box:GetText():len())
-				return
-			end
-		end
-	end)
+
+	if type(_G["HandleModifiedItemClick"]) == "function" then
+		hooksecurefunc("HandleModifiedItemClick", function(link)
+			FeedFocusedBox(link)
+		end)
+	end
+
+	if type(_G["ChatEdit_InsertLink"]) == "function" then
+		hooksecurefunc("ChatEdit_InsertLink", function(link)
+			FeedFocusedBox(link)
+		end)
+	end
 end
 
 -- Make an edit box "drop-and-go": shift-clicking or dragging an item in fills
@@ -378,9 +416,33 @@ end
 
 local GameTooltip = _G["GameTooltip"]
 
+-- Attach a hover tooltip (gold title + wrapped grey body) to any button so every
+-- action explains itself. HookScript so it never clobbers an existing OnEnter.
+local function AttachTooltip(frame, title, body)
+	frame:HookScript("OnEnter", function(self)
+		if not GameTooltip then
+			return
+		end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		if title and title ~= "" then
+			GameTooltip:AddLine(title, 1, 0.82, 0)
+		end
+		if body and body ~= "" then
+			GameTooltip:AddLine(body, 0.8, 0.8, 0.8, true)
+		end
+		GameTooltip:Show()
+	end)
+	frame:HookScript("OnLeave", function()
+		if GameTooltip then
+			GameTooltip:Hide()
+		end
+	end)
+end
+
 -- Forward declaration: the row helpers below remove rules and then refresh the
 -- editor, but RefreshRuleEditor is defined further down.
 local RefreshRuleEditor
+local SnapshotCurrentItemRules
 
 -- Delete a single rule by its position in the list, then redraw.
 local function RemoveItemRule(index)
@@ -391,6 +453,7 @@ local function RemoveItemRule(index)
 	end
 	table.remove(rules, index)
 	F.Print(L["Removed item rule: %s -> %s"], FormatMatch(rule.match), rule.target or "")
+	SnapshotCurrentItemRules()
 	RefreshRuleEditor()
 end
 
@@ -401,6 +464,7 @@ local function ToggleItemRule(index)
 		return
 	end
 	rule.enabled = (rule.enabled == false)
+	SnapshotCurrentItemRules()
 	RefreshRuleEditor()
 end
 
@@ -411,7 +475,126 @@ local function SetAllItemRules(enabled)
 	for i = 1, #rules do
 		rules[i].enabled = enabled
 	end
+	SnapshotCurrentItemRules()
 	RefreshRuleEditor()
+end
+
+local function RuleKey(rule)
+	return type(rule.match) .. ":" .. tostring(rule.match) .. "\001" .. tostring(rule.target or "")
+end
+
+local function CloneItemRule(rule)
+	return {
+		match = rule.match,
+		target = rule.target,
+		enabled = rule.enabled,
+	}
+end
+
+local function EnsureItemRuleSnapshots()
+	local global = ns.global
+	if not global then
+		return nil
+	end
+	if type(global.itemRuleSnapshots) ~= "table" then
+		global.itemRuleSnapshots = {}
+	end
+	return global.itemRuleSnapshots
+end
+
+function SnapshotCurrentItemRules()
+	local snapshots = EnsureItemRuleSnapshots()
+	local me = ns.State.playerName or F.FullName("player")
+	if not (snapshots and me) then
+		return
+	end
+
+	local rules = ns.db and ns.db.itemRules
+	if not rules or #rules == 0 then
+		snapshots[me] = nil
+		return
+	end
+
+	local copy = {}
+	for i = 1, #rules do
+		copy[i] = CloneItemRule(rules[i])
+	end
+	snapshots[me] = {
+		updatedAt = time(),
+		itemRules = copy,
+	}
+end
+
+local function MergeItemRulesFromSnapshot(sourceKey)
+	local snapshots = EnsureItemRuleSnapshots()
+	local snapshot = snapshots and snapshots[sourceKey]
+	local sourceRules = snapshot and snapshot.itemRules
+	if not sourceRules or #sourceRules == 0 then
+		return
+	end
+
+	local existing = {}
+	local rules = ns.db.itemRules
+	for i = 1, #rules do
+		existing[RuleKey(rules[i])] = true
+	end
+
+	local added, skipped = 0, 0
+	for i = 1, #sourceRules do
+		local sourceRule = sourceRules[i]
+		if sourceRule and sourceRule.match ~= nil and sourceRule.target and sourceRule.target ~= "" then
+			local key = RuleKey(sourceRule)
+			if existing[key] then
+				skipped = skipped + 1
+			else
+				added = added + 1
+				existing[key] = true
+				rules[#rules + 1] = CloneItemRule(sourceRule)
+			end
+		end
+	end
+
+	SnapshotCurrentItemRules()
+	RefreshRuleEditor()
+	F.Print(L["Merged %d rule(s) from %s. Skipped %d duplicate(s)."], added, sourceKey, skipped)
+end
+
+local function ShowRuleCopyMenu(owner)
+	if not (MenuUtil and MenuUtil.CreateContextMenu) then
+		return
+	end
+
+	SnapshotCurrentItemRules()
+	MenuUtil.CreateContextMenu(owner, function(_, root)
+		root:CreateTitle(L["Copy specific item rules from"])
+
+		local snapshots = EnsureItemRuleSnapshots()
+		local me = ns.State.playerName
+		local sources = {}
+		if snapshots then
+			for key, snapshot in pairs(snapshots) do
+				if key ~= me and type(snapshot) == "table" and type(snapshot.itemRules) == "table" and #snapshot.itemRules > 0 then
+					sources[#sources + 1] = key
+				end
+			end
+		end
+
+		if #sources == 0 then
+			root:CreateButton(L["No saved rule sets yet. Log into another character with rules once."], function() end)
+			return
+		end
+
+		tablesort(sources)
+		local Roster = ns:GetModule("Roster")
+		for i = 1, #sources do
+			local key = sources[i]
+			local snapshot = snapshots and snapshots[key]
+			local count = snapshot and snapshot.itemRules and #snapshot.itemRules or 0
+			root:CreateButton("|c" .. Roster.ClassHex(key) .. format(L["%s (%d rules)"], key, count) .. "|r", function()
+				MergeItemRulesFromSnapshot(key)
+			end)
+		end
+	end)
 end
 
 -- Set/clear an itemID's keep-N reserve from a row's edit box. n<=0 or empty
@@ -802,15 +985,17 @@ end
 
 -- Items not seen this session aren't cached, so the first draw shows a grey
 -- numeric fallback. The client fires GET_ITEM_INFO_RECEIVED once each item
--- loads; redraw (debounced) so names + quality colours fill in.
+-- loads; redraw (debounced) so names + quality colours fill in. GET_ITEM_INFO_-
+-- RECEIVED is a firehose, so we only listen while the editor is actually open
+-- (registered/unregistered from the window's OnShow/OnHide) - no point waking
+-- for every item load in the world when there's nothing to redraw.
 local infoWatcher = CreateFrame("Frame")
-infoWatcher:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 infoWatcher:SetScript("OnEvent", function(self)
-	if not (ruleEditor and ruleEditor:IsShown()) or self.pending then
+	if self.pending then
 		return
 	end
 	self.pending = true
-	C_Timer.After(0.1, function()
+	ns:After(0.1, function()
 		self.pending = false
 		RefreshRuleEditor()
 	end)
@@ -838,7 +1023,7 @@ local function AddItemRule(matchText, targetText)
 	-- (soulbound / Bind-on-Pickup / quest): the rule would silently never fire.
 	-- This now covers itemID, link, AND name matches - any of them is resolved
 	-- and, when it sits in our bags, checked against its live binding.
-	local routable, name = ns:GetModule("Engine").IsItemRoutable(match)
+	local routable, name, _, reason = ns:GetModule("Engine").IsItemRoutable(match)
 	if not routable then
 		local label
 		if name then
@@ -848,12 +1033,17 @@ local function AddItemRule(matchText, targetText)
 		else
 			label = "|cffffffff" .. tostring(match) .. "|r"
 		end
-		F.Print(L["%s can't be mailed from this character - rule not added."], label)
+		if reason then
+			F.Print(L["%s can't be mailed because %s - rule not added."], label, reason)
+		else
+			F.Print(L["%s can't be mailed from this character - rule not added."], label)
+		end
 		return
 	end
 
 	ns.db.itemRules[#ns.db.itemRules + 1] = { match = match, target = targetText }
 	F.Print(L["Added item rule: %s -> %s"], FormatMatch(match), targetText)
+	SnapshotCurrentItemRules()
 	RefreshRuleEditor()
 end
 
@@ -865,6 +1055,7 @@ local function RemoveLastItemRule()
 	end
 	rules[#rules] = nil
 	F.Print(L["Removed item rule: %s -> %s"], FormatMatch(rule.match), rule.target or "")
+	SnapshotCurrentItemRules()
 	RefreshRuleEditor()
 end
 
@@ -994,6 +1185,16 @@ local function BuildEditorContent(frame, anchorTop)
 	pick:SetScript("OnClick", function(self)
 		ShowTargetMenu(self, targetInput)
 	end)
+	AttachTooltip(pick, L["Pick"], L["Choose the destination character from your known alts."])
+
+	-- Merge another character's specific item rules in. Sits by Pick (the other
+	-- target-related action) rather than the add-rule strip below.
+	local copyRules = CreateButton(rulesInset, L["Copy"], 60)
+	copyRules:SetPoint("LEFT", pick, "RIGHT", 8, 0)
+	copyRules:SetScript("OnClick", function(self)
+		ShowRuleCopyMenu(self)
+	end)
+	AttachTooltip(copyRules, L["Copy"], L["Merge another character's specific item rules into this one. Duplicates are skipped."])
 
 	local addRule = CreateButton(rulesInset, L["Add Rule"], 100)
 	addRule:SetPoint("TOPLEFT", matchInput, "BOTTOMLEFT", 0, -10)
@@ -1002,6 +1203,7 @@ local function BuildEditorContent(frame, anchorTop)
 		matchInput:SetText("")
 		matchInput:SetFocus()
 	end)
+	AttachTooltip(addRule, L["Add Rule"], L["Route the entered item to the target character."])
 	matchInput:SetScript("OnEnterPressed", function()
 		addRule:Click()
 	end)
@@ -1012,27 +1214,29 @@ local function BuildEditorContent(frame, anchorTop)
 	local listLabel = CreateLabel(rulesInset, L["Your routes - tick to enable, set keep to hold some back, x to remove:"], "GameFontDisableSmall")
 	listLabel:SetPoint("TOPLEFT", addRule, "BOTTOMLEFT", 0, -12)
 
-	-- Bulk toggles for long lists. Right-aligned on the list-label line so they
-	-- never crowd the routes themselves.
-	local uncheckAll = CreateButton(rulesInset, L["Uncheck All"], 90)
-	uncheckAll:SetPoint("BOTTOMRIGHT", rulesInset, "TOPRIGHT", -12, 0)
-	uncheckAll:SetPoint("TOP", listLabel, "TOP", 0, 6)
-	uncheckAll:SetScript("OnClick", function()
-		SetAllItemRules(false)
-	end)
-
-	local checkAll = CreateButton(rulesInset, L["Check All"], 80)
-	checkAll:SetPoint("RIGHT", uncheckAll, "LEFT", -6, 0)
-	checkAll:SetScript("OnClick", function()
-		SetAllItemRules(true)
-	end)
-
 	-- Scrollable viewport for the pooled rule rows. FillRuleRows lays rows out
 	-- into the scroll child and grows it so every rule is reachable.
 	local ruleScroll, ruleContent = CreateScrollList(rulesInset)
 	ruleScroll:SetPoint("TOPLEFT", listLabel, "BOTTOMLEFT", 0, -4)
 	ruleScroll:SetPoint("BOTTOMRIGHT", rulesInset, "BOTTOMRIGHT", -26, 12)
 	frame.ruleListHolder = ruleContent
+
+	-- Bulk toggles for long lists, on the same row as Add Rule so the action
+	-- buttons read as one strip. Chained off addRule with a SINGLE anchor each
+	-- (a button pinned by two competing vertical anchors stretches off-frame).
+	local checkAll = CreateButton(rulesInset, L["Check All"], 80)
+	checkAll:SetPoint("LEFT", addRule, "RIGHT", 12, 0)
+	checkAll:SetScript("OnClick", function()
+		SetAllItemRules(true)
+	end)
+	AttachTooltip(checkAll, L["Check All"], L["Enable every item rule in the list at once."])
+
+	local uncheckAll = CreateButton(rulesInset, L["Uncheck All"], 90)
+	uncheckAll:SetPoint("LEFT", checkAll, "RIGHT", 6, 0)
+	uncheckAll:SetScript("OnClick", function()
+		SetAllItemRules(false)
+	end)
+	AttachTooltip(uncheckAll, L["Uncheck All"], L["Disable every item rule in the list at once (without deleting them)."])
 
 	-- ---- Card 2: exclusions ----
 	local exclInset = CreateInset(frame)
@@ -1061,6 +1265,7 @@ local function BuildEditorContent(frame, anchorTop)
 		exclInput:SetText("")
 		exclInput:SetFocus()
 	end)
+	AttachTooltip(addExcl, L["Add Exclusion"], L["Never mail the entered item, even if a rule would match it."])
 	exclInput:SetScript("OnEnterPressed", function()
 		addExcl:Click()
 	end)
@@ -1068,6 +1273,7 @@ local function BuildEditorContent(frame, anchorTop)
 	local removeExcl = CreateButton(exclInset, L["Remove Last Exclusion"], 160)
 	removeExcl:SetPoint("LEFT", addExcl, "RIGHT", 8, 0)
 	removeExcl:SetScript("OnClick", RemoveLastExclusion)
+	AttachTooltip(removeExcl, L["Remove Last Exclusion"], L["Stop excluding the most recently added item."])
 
 	local hint = CreateLabel(exclInset, L["Hover an item to identify it; click it to remove."], "GameFontDisableSmall")
 	hint:SetPoint("TOPLEFT", exclInput, "BOTTOMLEFT", 0, -10)
@@ -1142,7 +1348,14 @@ local function CreateRuleWindow()
 		special[#special + 1] = "LedgerGoblinRuleWindow"
 	end
 
-	win:SetScript("OnShow", RefreshRuleEditor)
+	-- Only burn cycles on GET_ITEM_INFO_RECEIVED while the editor is visible.
+	win:SetScript("OnShow", function()
+		infoWatcher:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+		RefreshRuleEditor()
+	end)
+	win:SetScript("OnHide", function()
+		infoWatcher:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
+	end)
 	ruleEditor = win
 	return win
 end
@@ -1186,6 +1399,7 @@ local function CreateRuleLauncher()
 		end
 		ToggleRuleWindow(true)
 	end)
+	AttachTooltip(open, L["Open Rule Editor"], L["Open the movable Rule Editor window so you can drag or shift-click items from your bags."])
 
 	local hint = CreateLabel(frame, L["You can also open it any time with /ledger rules."], "GameFontDisableSmall")
 	hint:SetPoint("TOPLEFT", open, "BOTTOMLEFT", 2, -10)
@@ -1573,6 +1787,7 @@ local function HandleSlash(msg)
 			if rule then
 				rule.enabled = (rule.enabled == false)
 				F.Print(L["Route %d is now %s."], index, rule.enabled and L["Enabled"] or L["Disabled"])
+				SnapshotCurrentItemRules()
 				RefreshRuleEditor()
 			else
 				F.Print(L["Usage: /ledger rule toggle <n>"])
@@ -1650,6 +1865,7 @@ end
 
 ns:OnInit(function()
 	BuildPanel()
+	SnapshotCurrentItemRules()
 
 	ns:RegisterEvent("MAIL_SHOW", CreateMailboxButtons)
 

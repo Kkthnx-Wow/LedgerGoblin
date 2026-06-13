@@ -162,4 +162,12 @@ C.GLOBAL_DEFAULTS = {
 
 	-- Per-day analytics. key = "YYYY-MM-DD", value = { [target] = { copper, items } }.
 	analytics = {},
+
+	-- Per-character snapshots of specific item rules so another alt can merge
+	-- them later. key = "Name-Realm", value = { updatedAt, itemRules = { ... } }.
+	itemRuleSnapshots = {},
+
+	-- Account-wide lifetime count of confirmed mails sent, surfaced in each mail's
+	-- subject line ("...#N"). Incremented only on MAIL_SEND_SUCCESS.
+	sendCount = 0,
 }

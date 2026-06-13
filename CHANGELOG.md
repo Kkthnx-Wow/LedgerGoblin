@@ -1,5 +1,7 @@
 # Changelog
 
+<!-- markdownlint-disable MD024 -->
+
 All notable changes to **LedgerGoblin** are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
@@ -14,6 +16,13 @@ classification edge cases surfaced in live use.
 
 - **Check All / Uncheck All** buttons in the Rule Editor for quickly toggling
   long route lists.
+- **Copy** menu in the Rule Editor (next to Pick) for merging another character's
+  saved specific item routes into the current character without duplicating exact
+  matches.
+- **Flavoured mail subjects** — each mail now gets a random goblin one-liner plus
+  an account-wide lifetime send number (e.g. `Goblin's cut #142`). The counter
+  only advances on confirmed sends, so it's a real running tally.
+- **Lifetime mails sent** is now shown in `/ledger stats`.
 - **`/ledger trace`** — an opt-in, verbose send-pipeline diagnostic. Off by
   default; narrates every step of a run (attach results, recipient, the
   `SendMail` call, and which of success/fail/timeout/lock events arrive) so a
@@ -32,6 +41,8 @@ classification edge cases surfaced in live use.
   is now stripped so same-realm mail delivers.
 - **Large batches no longer stall** mid-run requiring the mailbox to be closed
   and reopened.
+- **Uncheck All button layout** no longer stretches or spills off the Rule Editor
+  frame.
 
 ### Changed
 
@@ -44,6 +55,10 @@ classification edge cases surfaced in live use.
 - **Attachment retries and clean cancellation.** Transient attach failures retry
   before skipping a chunk, and closing the mailbox mid-run cancels cleanly
   without leaving stale timers.
+- **Per-day analytics are capped at 90 days** so the saved-variables file can't
+  grow without bound over time.
+- **Missing locale strings degrade to readable English** instead of erroring, via
+  a fallback on the locale table.
 
 ## [1.0.0] - 2026-06-11
 

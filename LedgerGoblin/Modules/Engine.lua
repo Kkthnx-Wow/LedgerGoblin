@@ -46,6 +46,7 @@ local issecret = _G["issecretvalue"] -- Midnight only; nil elsewhere (guards han
 local IsShiftKeyDown = IsShiftKeyDown
 local strlower = string.lower
 local format = string.format
+local mathrandom = math.random
 local mathmin = math.min
 local mathmax = math.max
 local mathfloor = math.floor
@@ -62,7 +63,43 @@ local QUALITY_BY_ENUM = C.QUALITY_BY_ENUM
 local ROUTE_ORDER = C.ROUTE_ORDER
 local ACCOUNT_BOUND = C.ACCOUNT_BOUND
 local BIND_ON_EQUIP = C.BIND.ON_EQUIP
-local MAIL_SUBJECT = "LedgerGoblin"
+local MAIL_SUBJECT = "LedgerGoblin" -- brand fallback if quip building ever fails
+
+-- Mail subject flavour. WoW caps subjects at 31 chars, so quips stay short and we
+-- always reserve room for the " #N" lifetime counter (account-wide). The number
+-- is the meaningful part, so the quip is trimmed first if space runs short.
+local MAIL_SUBJECT_MAX = 31
+local SUBJECT_QUIPS = {
+	L["Cha-ching!"],
+	L["The goblin's cut"],
+	L["Profit incoming"],
+	L["Mailed with greed"],
+	L["Another haul"],
+	L["Gold rolls downhill"],
+	L["For the warband"],
+	L["Goblin Express"],
+	L["Special delivery"],
+	L["Restock, boss"],
+	L["Hot goods"],
+	L["Coin counted"],
+	L["Greed is good"],
+	L["Pack it up"],
+	L["Goblin-approved"],
+}
+
+-- Next subject string + the send number it represents. The counter is committed
+-- to the account DB only on a confirmed send (CompleteCurrent), so failed or
+-- timed-out attempts never burn a number or inflate the lifetime tally.
+local function BuildSubject()
+	local n = ((ns.global and ns.global.sendCount) or 0) + 1
+	local suffix = " #" .. n
+	local quip = SUBJECT_QUIPS[mathrandom(#SUBJECT_QUIPS)] or MAIL_SUBJECT
+	local room = MAIL_SUBJECT_MAX - #suffix
+	if #quip > room then
+		quip = quip:sub(1, room)
+	end
+	return quip .. suffix, n
+end
 
 -- Breathers around SendMail. The queue is already one-in-flight and waits for
 -- MAIL_SEND_SUCCESS, but the compose frame still needs a moment to digest item
@@ -137,7 +174,7 @@ local function UpdateComposeFrame()
 	end
 end
 
-local function PrepareComposeFields(recipient)
+local function PrepareComposeFields(recipient, subject)
 	local nameBox = _G["SendMailNameEditBox"]
 	if nameBox and nameBox.SetText then
 		nameBox:SetText(recipient)
@@ -145,7 +182,7 @@ local function PrepareComposeFields(recipient)
 
 	local subjectBox = _G["SendMailSubjectEditBox"]
 	if subjectBox and subjectBox.SetText then
-		subjectBox:SetText(MAIL_SUBJECT)
+		subjectBox:SetText(subject or MAIL_SUBJECT)
 	end
 
 	UpdateComposeFrame()
@@ -790,7 +827,12 @@ local function CompleteCurrent()
 		return
 	end
 	queue.pending = nil
-	trace("CompleteCurrent: %s confirmed; advancing to job %d", tostring(job.target), queue.index + 1)
+	-- Commit the lifetime send counter now that the mail is confirmed, so the
+	-- subject's "#N" matches a real, completed send (no gaps from failures).
+	if job.subjectNumber and ns.global then
+		ns.global.sendCount = job.subjectNumber
+	end
+	trace("CompleteCurrent: %s confirmed (#%s); advancing to job %d", tostring(job.target), tostring(job.subjectNumber), queue.index + 1)
 	ns:GetModule("Logger").RecordMail(job.target, job.money or 0, job.items)
 	queue.index = queue.index + 1
 	-- Pace the next mail instead of slamming SendMail the moment success lands;
@@ -930,13 +972,18 @@ ProcessNext = function()
 	end
 
 	queue.pending = job
+	-- Subject: a goblin quip + the account-wide lifetime send number. Built once
+	-- per job (retries reuse it) so the number is stable; committed on success.
+	if not job.subject then
+		job.subject, job.subjectNumber = BuildSubject()
+	end
 	-- Strip our own realm from the recipient: same-realm mail silently fails when
 	-- addressed "Name-OwnRealm" (no success/fail event - it just doesn't send).
 	local recipient = F.MailRecipient(job.target)
 	-- Mirror the recipient into the visible To box too. SendMail's arg should be
 	-- enough, but populating the field keeps Blizzard's send-validation happy and
 	-- makes the open mail readable if a run ever stalls.
-	local nameBox, subjectBox = PrepareComposeFields(recipient)
+	local nameBox, subjectBox = PrepareComposeFields(recipient, job.subject)
 	trace(
 		"  recipient: job.target=%s -> SendMail recipient=%s | nameBox=%s subjectBox=%s",
 		tostring(job.target),
@@ -960,10 +1007,10 @@ ProcessNext = function()
 		end
 		-- Re-set the compose fields right before firing; nothing should have
 		-- cleared them during the settle, but Blizzard's frame loves to surprise us.
-		PrepareComposeFields(recipient)
+		PrepareComposeFields(recipient, job.subject)
 		TraceComposeState("before SendMail")
-		trace("  -> SendMail(%s, %q) | canSend=%s price=%s", tostring(recipient), MAIL_SUBJECT, tostring(SafeCanSend()), tostring(GetSendMailPrice and GetSendMailPrice()))
-		SendMail(recipient, MAIL_SUBJECT, "")
+		trace("  -> SendMail(%s, %q) | canSend=%s price=%s", tostring(recipient), job.subject, tostring(SafeCanSend()), tostring(GetSendMailPrice and GetSendMailPrice()))
+		SendMail(recipient, job.subject, "")
 
 		-- Timeout guard in case MAIL_SEND_SUCCESS never arrives. Do not record this
 		-- as sent: a missing success event means Blizzard did not confirm the mail.
@@ -1145,10 +1192,13 @@ function Engine.IsItemRoutable(match)
 	end
 	clsName = clsName or name
 
-	-- Live inventory binding wins when the item sits in our bags right now.
+	-- Live inventory binding wins when the item sits in our bags right now. A
+	-- false here means we hold a copy that's already soulbound to us.
 	local inventoryRoutable = IsInventoryMatchRoutable(itemID, name)
-	if inventoryRoutable ~= nil then
-		return inventoryRoutable, clsName, bindType
+	if inventoryRoutable == true then
+		return true, clsName, bindType
+	elseif inventoryRoutable == false then
+		return false, clsName, bindType, L["it's soulbound to this character"]
 	end
 
 	if bindType == nil then
@@ -1160,7 +1210,8 @@ function Engine.IsItemRoutable(match)
 		if IsItemIDAccountBound(itemID, bindType) then
 			return true, clsName, bindType
 		end
-		return false, clsName, bindType
+		local reason = (bindType == C.BIND.QUEST) and L["it's a quest item"] or L["it's Bind on Pickup"]
+		return false, clsName, bindType, reason
 	end
 	return true, clsName, bindType
 end
