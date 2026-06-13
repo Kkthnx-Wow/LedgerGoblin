@@ -30,11 +30,15 @@ local GetContainerItemInfoLegacy = _G["GetContainerItemInfo"]
 local PickupContainerItemLegacy = _G["PickupContainerItem"]
 local ItemLocation = _G["ItemLocation"]
 local GetMoney = GetMoney
+local GetTime = GetTime
+local GetNetStats = GetNetStats
 local SendMail = SendMail
 local SetSendMailMoney = SetSendMailMoney
 local ClearSendMail = ClearSendMail
 local ClickSendMailItemButton = ClickSendMailItemButton
 local GetSendMailItem = _G["GetSendMailItem"]
+local SendMailFrame_CanSend = _G["SendMailFrame_CanSend"]
+local SendMailFrame_Update = _G["SendMailFrame_Update"]
 local ClearCursor = ClearCursor
 local InCombatLockdown = InCombatLockdown
 local PanelTemplates_GetSelectedTab = _G["PanelTemplates_GetSelectedTab"]
@@ -43,6 +47,7 @@ local IsShiftKeyDown = IsShiftKeyDown
 local strlower = string.lower
 local format = string.format
 local mathmin = math.min
+local mathmax = math.max
 local mathfloor = math.floor
 local pcall = pcall
 
@@ -59,12 +64,121 @@ local ACCOUNT_BOUND = C.ACCOUNT_BOUND
 local BIND_ON_EQUIP = C.BIND.ON_EQUIP
 local MAIL_SUBJECT = "LedgerGoblin"
 
--- Breather between consecutive mails. The queue is already one-in-flight and
--- waits for MAIL_SEND_SUCCESS, but firing SendMail again the instant the server
--- confirms is asking for trouble (locked-slot races, mailbox throwing a fit on
--- rapid-fire sends). Half a second is imperceptible to a human and keeps the
--- mailbox honest.
-local SEND_COOLDOWN_SECONDS = 0.5
+-- Breathers around SendMail. The queue is already one-in-flight and waits for
+-- MAIL_SEND_SUCCESS, but the compose frame still needs a moment to digest item
+-- locks, fields, and server latency. Use conservative floors, then scale up a
+-- little on high-latency connections without letting the queue feel stuck.
+local SEND_COOLDOWN_MIN_SECONDS = 0.5
+local SEND_COOLDOWN_MAX_SECONDS = 1.5
+local COMPOSE_SETTLE_MIN_SECONDS = 0.3
+local COMPOSE_SETTLE_MAX_SECONDS = 1.0
+local SEND_LATENCY_MULTIPLIER = 2
+local ATTACH_RETRY_DELAY_SECONDS = 0.5
+local MAX_ATTACH_RETRIES = 2
+local SEND_ITEM_LOCK_TIMEOUT_SECONDS = 5
+
+-- ---------------------------------------------------------------------------
+-- Send-pipeline tracing
+--   Off by default; /ledger trace flips it. When a batch mysteriously "gets
+--   stuck", this narrates every step - attach results, money, the SendMail call,
+--   and which of success/fail/timeout actually arrives - so we stop guessing and
+--   see WHERE it dies. Output is gated so normal users never see the noise.
+-- ---------------------------------------------------------------------------
+local sendDebug = false
+
+local function trace(fmt, ...)
+	if not sendDebug then
+		return
+	end
+	if select("#", ...) > 0 then
+		F.Print("|cff66ccff[trace]|r " .. fmt, ...)
+	else
+		F.Print("|cff66ccff[trace]|r " .. fmt)
+	end
+end
+
+local function LatencyDelay(minSeconds, maxSeconds)
+	if not GetNetStats then
+		return minSeconds
+	end
+
+	local _, _, homeMs, worldMs = GetNetStats()
+	local latencyMs = mathmax(homeMs or 0, worldMs or 0)
+	if latencyMs <= 0 then
+		return minSeconds
+	end
+
+	local latencySeconds = (latencyMs / 1000) * SEND_LATENCY_MULTIPLIER
+	return mathmin(maxSeconds, mathmax(minSeconds, latencySeconds))
+end
+
+local function ComposeSettleDelay()
+	return LatencyDelay(COMPOSE_SETTLE_MIN_SECONDS, COMPOSE_SETTLE_MAX_SECONDS)
+end
+
+local function SendCooldownDelay()
+	return LatencyDelay(SEND_COOLDOWN_MIN_SECONDS, SEND_COOLDOWN_MAX_SECONDS)
+end
+
+local function SafeCanSend()
+	if not SendMailFrame_CanSend then
+		return nil
+	end
+	local ok, canSend = pcall(SendMailFrame_CanSend)
+	if ok then
+		return canSend and true or false
+	end
+	return nil
+end
+
+local function UpdateComposeFrame()
+	if SendMailFrame_Update then
+		pcall(SendMailFrame_Update)
+	end
+end
+
+local function PrepareComposeFields(recipient)
+	local nameBox = _G["SendMailNameEditBox"]
+	if nameBox and nameBox.SetText then
+		nameBox:SetText(recipient)
+	end
+
+	local subjectBox = _G["SendMailSubjectEditBox"]
+	if subjectBox and subjectBox.SetText then
+		subjectBox:SetText(MAIL_SUBJECT)
+	end
+
+	UpdateComposeFrame()
+	return nameBox, subjectBox
+end
+
+local function TraceComposeState(label)
+	local nameBox = _G["SendMailNameEditBox"]
+	local subjectBox = _G["SendMailSubjectEditBox"]
+	local nameText = nameBox and nameBox.GetText and nameBox:GetText() or nil
+	local subjectText = subjectBox and subjectBox.GetText and subjectBox:GetText() or nil
+	trace(
+		"  compose %s: to=%q subject=%q canSend=%s price=%s",
+		label,
+		tostring(nameText or ""),
+		tostring(subjectText or ""),
+		tostring(SafeCanSend()),
+		tostring(GetSendMailPrice and GetSendMailPrice())
+	)
+end
+
+function Engine.SetSendDebug(on)
+	sendDebug = on and true or false
+	F.Print("|cff66ccffLedgerGoblin send tracing %s.|r", sendDebug and "ON" or "OFF")
+end
+
+function Engine.ToggleSendDebug()
+	Engine.SetSendDebug(not sendDebug)
+end
+
+function Engine.IsSendDebug()
+	return sendDebug
+end
 
 -- Fallback repair reserve when we've never seen this character's repair cost at
 -- a vendor yet. Conservative: better to under-send gold than strand someone.
@@ -98,8 +212,13 @@ else
 	end
 end
 
+-- Carry inventory runs backpack(0) -> the four bag slots(1-4) -> the reagent
+-- bag(5). NUM_BAG_SLOTS only counts 1-4, so on its own it SKIPS the reagent bag -
+-- which is exactly where ore/herbs/lumber live. Include it explicitly; an empty
+-- reagent-bag slot just reports 0 slots, so scanning it is always safe.
+local REAGENTBAG_CONTAINER = (Enum and Enum.BagIndex and Enum.BagIndex.ReagentBag) or 5
 local function LastBag()
-	return _G["NUM_BAG_SLOTS"] or 4
+	return mathmax(_G["NUM_BAG_SLOTS"] or 4, REAGENTBAG_CONTAINER)
 end
 
 -- ---------------------------------------------------------------------------
@@ -136,17 +255,90 @@ local function ClassifyItem(itemID, link)
 end
 
 -- Can this item leave for another character at all?
---   * not bound            -> yes (includes BoE gear still in your bags)
---   * account/warband bound-> yes (goes to your own alts)
---   * soulbound (BoP)      -> no
--- bindType may be nil (uncached); when the item is bound and we can't classify
--- it, we refuse rather than risk mailing something stuck.
-local function IsMailable(isBound, bindType)
-	if not isBound then
-		return true
+--   * not bound             -> yes (includes BoE gear still in your bags)
+--   * account/warband bound  -> yes (goes to your own alts)
+--   * soulbound (BoP) / quest -> no
+-- The mailability test is `(not isBound) or <account-bound>`, where the
+-- account-bound half uses the tooltip-backed helpers below because GetItemInfo's
+-- static bindType can't be trusted for Warbound reagents (see next comment).
+--
+-- Enum.ItemBind 7/8/9 (the static bindType) catches most account/warband items,
+-- but GetItemInfo flat-out lies about a pile of Warbound reagents & trade goods
+-- (Arden Lumber, looking at you) - reporting None/BoP for things the game itself
+-- labels "Warbound". When the fast path is unsure we fall back to the item's
+-- actual tooltip, which doesn't lie. Truth source: Enum.TooltipDataItemBinding.
+local C_TooltipInfo = C_TooltipInfo
+local WARBAND_BONDING = {
+	[1] = true, -- Account ("Warbound")
+	[2] = true, -- BnetAccount (legacy)
+	[4] = true, -- BindToAccount (legacy)
+	[5] = true, -- BindToBnetAccount ("Binds to Warband")
+	[9] = true, -- AccountUntilEquipped ("Warbound until equipped")
+	[10] = true, -- BindToAccountUntilEquipped ("Binds to Warband until equipped")
+}
+
+-- Localized binding strings, in case a tooltip line lacks the numeric `bonding`
+-- field on some client. Built once from Blizzard's own globals so we stay
+-- locale-safe instead of hard-coding English.
+local WARBAND_STRINGS = {}
+do
+	local keys = {
+		"ITEM_BIND_TO_BNETACCOUNT",
+		"ITEM_BNETACCOUNTBOUND",
+		"ITEM_ACCOUNTBOUND",
+		"ITEM_BIND_TO_ACCOUNT",
+	}
+	for i = 1, #keys do
+		local s = _G[keys[i]]
+		if s then
+			WARBAND_STRINGS[s] = true
+		end
 	end
+end
+
+-- Does this tooltip data describe a Warband/account-bound item (mailable to your
+-- own alts)? Soulbound / BoP lines deliberately do NOT match.
+local function TooltipSaysWarband(data)
+	if not (data and data.lines) then
+		return false
+	end
+	local lines = data.lines
+	for i = 1, #lines do
+		local line = lines[i]
+		if line then
+			if line.bonding and WARBAND_BONDING[line.bonding] then
+				return true
+			end
+			local text = line.leftText
+			if text and WARBAND_STRINGS[text] then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+-- Account/warband-bound verdict for a bag slot: trust the static bindType first
+-- (cheap), then confirm via tooltip for the reagents GetItemInfo fibs about.
+-- Only call this for items already known to be bound - no point tooltip-scanning
+-- the entire bag.
+local function IsBagSlotAccountBound(bag, slot, bindType)
 	if bindType and ACCOUNT_BOUND[bindType] then
 		return true
+	end
+	if C_TooltipInfo and C_TooltipInfo.GetBagItem then
+		return TooltipSaysWarband(C_TooltipInfo.GetBagItem(bag, slot))
+	end
+	return false
+end
+
+-- Same idea for an item we only have an ID for (rule typed/pasted, not in bags).
+local function IsItemIDAccountBound(itemID, bindType)
+	if bindType and ACCOUNT_BOUND[bindType] then
+		return true
+	end
+	if itemID and C_TooltipInfo and C_TooltipInfo.GetItemByID then
+		return TooltipSaysWarband(C_TooltipInfo.GetItemByID(itemID))
 	end
 	return false
 end
@@ -188,7 +380,7 @@ local function IsInventoryMatchRoutable(itemID, name)
 					end
 
 					local _, bindType = ClassifyItem(info.itemID, info.hyperlink)
-					if bindType and ACCOUNT_BOUND[bindType] then
+					if IsBagSlotAccountBound(bag, slot, bindType) then
 						return true
 					end
 
@@ -235,8 +427,8 @@ local resolvers = {
 		end
 	end,
 
-	boa = function(db, _, _, _, bindType)
-		if bindType and ACCOUNT_BOUND[bindType] then
+	boa = function(db, _, _, _, bindType, accountBound)
+		if accountBound or (bindType and ACCOUNT_BOUND[bindType]) then
 			local b = db.bind.boa
 			if b.enabled and b.target ~= "" then
 				return b.target
@@ -257,7 +449,7 @@ local resolvers = {
 
 -- Resolve a destination for an item, walking ROUTE_ORDER and stopping at the
 -- first category that claims it. Excluded items short-circuit to nil.
-local function ResolveTarget(itemID, name, quality, bindType)
+local function ResolveTarget(itemID, name, quality, bindType, accountBound)
 	local db = ns.db
 	if itemID and db.exclusions[itemID] then
 		return nil
@@ -265,7 +457,7 @@ local function ResolveTarget(itemID, name, quality, bindType)
 	for i = 1, #ROUTE_ORDER do
 		local resolver = resolvers[ROUTE_ORDER[i]]
 		if resolver then
-			local target = resolver(db, itemID, name, quality, bindType)
+			local target = resolver(db, itemID, name, quality, bindType, accountBound)
 			if target then
 				return target
 			end
@@ -364,9 +556,13 @@ local function ScanBags()
 				local safe = not (issecret and (issecret(quality) or issecret(itemID)))
 				if safe then
 					local name, bindType = ClassifyItem(itemID, info.hyperlink)
-					if IsMailable(info.isBound, bindType) then
+					-- Only bound items need the tooltip fallback; unbound stuff (incl.
+					-- BoE in bags) mails freely. This keeps the scan from tooltip-poking
+					-- every single bag slot - just the bound ones GetItemInfo might fib about.
+					local accountBound = info.isBound and IsBagSlotAccountBound(bag, slot, bindType) or false
+					if (not info.isBound) or accountBound then
 						local matchName = name or (info.hyperlink and info.hyperlink:match("%[(.-)%]"))
-						local target = ResolveTarget(itemID, matchName, quality, bindType)
+						local target = ResolveTarget(itemID, matchName, quality, bindType, accountBound)
 						if target then
 							local list = scanByTarget[target]
 							if not list then
@@ -572,9 +768,14 @@ local function EnsureSendTab()
 end
 
 local queue = { jobs = nil, index = 0, pending = nil, token = 0 }
+local sendItemsLocked = false
+local sendItemsLockStartedAt = nil
 
 local function FinishRun()
 	ns.State.sending = false
+	sendItemsLocked = false
+	sendItemsLockStartedAt = nil
+	queue.token = queue.token + 1
 	queue.jobs = nil
 	queue.index = 0
 	queue.pending = nil
@@ -589,11 +790,14 @@ local function CompleteCurrent()
 		return
 	end
 	queue.pending = nil
+	trace("CompleteCurrent: %s confirmed; advancing to job %d", tostring(job.target), queue.index + 1)
 	ns:GetModule("Logger").RecordMail(job.target, job.money or 0, job.items)
 	queue.index = queue.index + 1
 	-- Pace the next mail instead of slamming SendMail the moment success lands;
 	-- bail if the run was cancelled (mailbox closed) during the wait.
-	ns:After(SEND_COOLDOWN_SECONDS, function()
+	local cooldownDelay = SendCooldownDelay()
+	trace("  next mail cooldown: %.2fs", cooldownDelay)
+	ns:After(cooldownDelay, function()
 		if ns.State.sending then
 			ProcessNext()
 		end
@@ -622,13 +826,33 @@ end
 ProcessNext = function()
 	local jobs = queue.jobs
 	if not jobs or queue.index > #jobs then
+		trace("ProcessNext: queue drained (index=%s, #jobs=%s) -> FinishRun", tostring(queue.index), tostring(jobs and #jobs))
 		FinishRun()
 		return
 	end
 
 	local job = jobs[queue.index]
+	trace("ProcessNext: job %d/%d -> %s | %d item(s), money=%s", queue.index, #jobs, tostring(job.target), #job.items, tostring(job.money or 0))
+
+	if sendItemsLocked then
+		local now = GetTime and GetTime() or 0
+		if sendItemsLockStartedAt and now - sendItemsLockStartedAt > SEND_ITEM_LOCK_TIMEOUT_SECONDS then
+			trace("  send items still locked after %.1fs; proceeding anyway", now - sendItemsLockStartedAt)
+			sendItemsLocked = false
+			sendItemsLockStartedAt = nil
+		else
+			trace("  send items locked; waiting 0.1s before composing")
+			ns:After(0.1, function()
+				if ns.State.sending and queue.jobs == jobs then
+					ProcessNext()
+				end
+			end)
+			return
+		end
+	end
 
 	if EnsureSendTab() then -- guards against the frame flipping back to Inbox
+		trace("  not on Send Mail tab; switched, retrying in 0.1s")
 		ns:After(0.1, function()
 			if ns.State.sending then
 				ProcessNext()
@@ -654,21 +878,37 @@ ProcessNext = function()
 		ClickSendMailItemButton(i)
 		if GetSendMailItem then
 			local attachedName = GetSendMailItem(i)
+			trace("  attach slot %d: %s (bag %s slot %s) -> GetSendMailItem=%s", i, tostring(it.link or it.name), tostring(it.bag), tostring(it.slot), tostring(attachedName))
 			if not attachedName then
 				if ClearSendMail then
 					ClearSendMail()
 				end
 				ClearCursor()
-				F.Print(L["Skipped mail to %s: could not attach %s."], job.target, it.link or it.name or "?")
-				queue.index = queue.index + 1
-				ProcessNext()
+				job.attachRetries = (job.attachRetries or 0) + 1
+				trace("  attach FAILED (retry %d/%d)", job.attachRetries, MAX_ATTACH_RETRIES)
+				if job.attachRetries <= MAX_ATTACH_RETRIES then
+					-- No SendMail happened yet, so retrying this same chunk is safe.
+					-- Usually this is a momentary item lock/server lag tantrum.
+					ns:After(ATTACH_RETRY_DELAY_SECONDS, function()
+						if ns.State.sending and queue.jobs == jobs and queue.index <= #jobs then
+							ProcessNext()
+						end
+					end)
+				else
+					F.Print(L["Skipped mail to %s: could not attach %s."], job.target, it.link or it.name or "?")
+					queue.index = queue.index + 1
+					ProcessNext()
+				end
 				return
 			end
+		else
+			trace("  attach slot %d: %s (no GetSendMailItem API - cannot verify)", i, tostring(it.link or it.name))
 		end
 	end
 
 	if job.money and job.money > 0 then
 		SetSendMailMoney(job.money)
+		trace("  SetSendMailMoney(%d)", job.money)
 	end
 
 	-- Per-mail funds guard. Postage is flat (POSTAGE); the attached money is
@@ -690,26 +930,60 @@ ProcessNext = function()
 	end
 
 	queue.pending = job
-	SendMail(job.target, MAIL_SUBJECT, "")
-
-	-- Timeout guard in case MAIL_SEND_SUCCESS never arrives. Do not record this
-	-- as sent: a missing success event means Blizzard did not confirm the mail.
+	-- Strip our own realm from the recipient: same-realm mail silently fails when
+	-- addressed "Name-OwnRealm" (no success/fail event - it just doesn't send).
+	local recipient = F.MailRecipient(job.target)
+	-- Mirror the recipient into the visible To box too. SendMail's arg should be
+	-- enough, but populating the field keeps Blizzard's send-validation happy and
+	-- makes the open mail readable if a run ever stalls.
+	local nameBox, subjectBox = PrepareComposeFields(recipient)
+	trace(
+		"  recipient: job.target=%s -> SendMail recipient=%s | nameBox=%s subjectBox=%s",
+		tostring(job.target),
+		tostring(recipient),
+		nameBox and "found" or "MISSING",
+		subjectBox and "found" or "MISSING"
+	)
+	TraceComposeState("after fields")
 	local myToken = queue.token + 1
 	queue.token = myToken
-	ns:After(10, function()
-		if queue.pending == job and queue.token == myToken then
-			queue.pending = nil
-			if ClearSendMail then
-				ClearSendMail()
-			end
-			ClearCursor()
-			F.Print(L["Mail to %s did not confirm within 10 seconds; stopping the run."], job.target)
-			FinishRun()
+
+	-- Give Blizzard's compose frame a beat to digest attached items, money, and
+	-- the recipient field before SendMail. Closing/reopening the mailbox "fixing"
+	-- stuck batches is the smell this delay is here for.
+	local composeDelay = ComposeSettleDelay()
+	trace("  compose settle delay: %.2fs", composeDelay)
+	ns:After(composeDelay, function()
+		if not (ns.State.sending and queue.pending == job and queue.token == myToken) then
+			trace("  settle aborted: sending=%s pending==job=%s tokenOK=%s", tostring(ns.State.sending), tostring(queue.pending == job), tostring(queue.token == myToken))
+			return
 		end
+		-- Re-set the compose fields right before firing; nothing should have
+		-- cleared them during the settle, but Blizzard's frame loves to surprise us.
+		PrepareComposeFields(recipient)
+		TraceComposeState("before SendMail")
+		trace("  -> SendMail(%s, %q) | canSend=%s price=%s", tostring(recipient), MAIL_SUBJECT, tostring(SafeCanSend()), tostring(GetSendMailPrice and GetSendMailPrice()))
+		SendMail(recipient, MAIL_SUBJECT, "")
+
+		-- Timeout guard in case MAIL_SEND_SUCCESS never arrives. Do not record this
+		-- as sent: a missing success event means Blizzard did not confirm the mail.
+		ns:After(10, function()
+			if queue.pending == job and queue.token == myToken then
+				queue.pending = nil
+				trace("  TIMEOUT: no MAIL_SEND_SUCCESS/MAIL_FAILED for %s within 10s", tostring(job.target))
+				if ClearSendMail then
+					ClearSendMail()
+				end
+				ClearCursor()
+				F.Print(L["Mail to %s did not confirm within 10 seconds; stopping the run."], job.target)
+				FinishRun()
+			end
+		end)
 	end)
 end
 
 local function StartRun(jobs)
+	trace("StartRun: %d job(s) queued", jobs and #jobs or 0)
 	ns:GetModule("Logger").BeginRun()
 	ns.State.sending = true
 	queue.jobs = jobs
@@ -881,6 +1155,11 @@ function Engine.IsItemRoutable(match)
 		return true, clsName, nil
 	end
 	if bindType == C.BIND.ON_PICKUP or bindType == C.BIND.QUEST then
+		-- GetItemInfo mislabels some Warbound reagents as BoP; the tooltip is the
+		-- tie-breaker before we refuse the rule.
+		if IsItemIDAccountBound(itemID, bindType) then
+			return true, clsName, bindType
+		end
 		return false, clsName, bindType
 	end
 	return true, clsName, bindType
@@ -907,11 +1186,12 @@ function Engine.Debug()
 					lockedTotal = lockedTotal + 1
 				end
 				local name, bindType = ClassifyItem(info.itemID, info.hyperlink)
-				local mailable = IsMailable(info.isBound, bindType)
+				local accountBound = info.isBound and IsBagSlotAccountBound(bag, slot, bindType) or false
+				local mailable = (not info.isBound) or accountBound
 				if mailable then
 					mailableTotal = mailableTotal + 1
 					local matchName = name or (info.hyperlink and info.hyperlink:match("%[(.-)%]"))
-					local target = ResolveTarget(info.itemID, matchName, info.quality, bindType)
+					local target = ResolveTarget(info.itemID, matchName, info.quality, bindType, accountBound)
 					if target then
 						routedTotal = routedTotal + 1
 						if shown < DEBUG_ITEM_CAP then
@@ -969,16 +1249,46 @@ end)
 
 ns:RegisterEvent("MAIL_CLOSED", function()
 	ns.State.mailboxOpen = false
+	if ns.State.sending then
+		trace("event MAIL_CLOSED during active run -> cancelling (pending=%s, index=%s)", queue.pending and tostring(queue.pending.target) or "none", tostring(queue.index))
+		if ClearSendMail then
+			ClearSendMail()
+		end
+		ClearCursor()
+		FinishRun()
+	end
 end)
 
 ns:RegisterEvent("MAIL_SEND_SUCCESS", function()
+	trace("event MAIL_SEND_SUCCESS (pending=%s)", queue.pending and tostring(queue.pending.target) or "none")
 	if queue.pending then
 		CompleteCurrent()
 	end
 end)
 
 ns:RegisterEvent("MAIL_FAILED", function()
+	trace("event MAIL_FAILED (pending=%s)", queue.pending and tostring(queue.pending.target) or "none")
 	if queue.pending then
 		FailCurrent()
 	end
+end)
+
+ns:RegisterEvent("MAIL_SUCCESS", function()
+	trace("event MAIL_SUCCESS (pending=%s)", queue.pending and tostring(queue.pending.target) or "none")
+end)
+
+ns:RegisterEvent("MAIL_LOCK_SEND_ITEMS", function()
+	sendItemsLocked = true
+	sendItemsLockStartedAt = GetTime and GetTime() or 0
+	trace("event MAIL_LOCK_SEND_ITEMS")
+end)
+
+ns:RegisterEvent("MAIL_UNLOCK_SEND_ITEMS", function()
+	sendItemsLocked = false
+	sendItemsLockStartedAt = nil
+	trace("event MAIL_UNLOCK_SEND_ITEMS")
+end)
+
+ns:RegisterEvent("MAIL_SEND_INFO_UPDATE", function()
+	trace("event MAIL_SEND_INFO_UPDATE")
 end)

@@ -174,3 +174,25 @@ function F.NormalizeTarget(input)
 	end
 	return input
 end
+
+-- The recipient string to hand SendMail. We store targets as "Name-Realm" so
+-- they stay unique across connected realms, but WoW *silently* drops same-realm
+-- mail when you tack your OWN realm onto the name - local delivery wants a bare
+-- "Name", and only connected/other realms want the "-Realm" suffix. So strip the
+-- suffix when it's our own realm; the mail vanishing into the void with no
+-- success/fail event is the symptom this exists to kill.
+function F.MailRecipient(target)
+	if type(target) ~= "string" or target == "" then
+		return target
+	end
+	local name, realm = target:match("^(.-)%-(.+)$")
+	if not name then
+		return target -- already a bare name, nothing to strip
+	end
+	local myRealm = (GetNormalizedRealmName and GetNormalizedRealmName())
+		or (GetRealmName and GetRealmName():gsub("%s+", "")) or ""
+	if myRealm ~= "" and realm:lower() == myRealm:lower() then
+		return name
+	end
+	return target
+end

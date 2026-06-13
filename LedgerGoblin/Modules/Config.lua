@@ -404,6 +404,16 @@ local function ToggleItemRule(index)
 	RefreshRuleEditor()
 end
 
+-- Bulk enable/disable every rule at once - a lifesaver for long lists. One
+-- redraw at the end instead of per-row.
+local function SetAllItemRules(enabled)
+	local rules = ns.db.itemRules
+	for i = 1, #rules do
+		rules[i].enabled = enabled
+	end
+	RefreshRuleEditor()
+end
+
 -- Set/clear an itemID's keep-N reserve from a row's edit box. n<=0 or empty
 -- clears the reserve entirely (send everything again).
 local function SetKeepForItem(itemID, n)
@@ -1002,6 +1012,21 @@ local function BuildEditorContent(frame, anchorTop)
 	local listLabel = CreateLabel(rulesInset, L["Your routes - tick to enable, set keep to hold some back, x to remove:"], "GameFontDisableSmall")
 	listLabel:SetPoint("TOPLEFT", addRule, "BOTTOMLEFT", 0, -12)
 
+	-- Bulk toggles for long lists. Right-aligned on the list-label line so they
+	-- never crowd the routes themselves.
+	local uncheckAll = CreateButton(rulesInset, L["Uncheck All"], 90)
+	uncheckAll:SetPoint("BOTTOMRIGHT", rulesInset, "TOPRIGHT", -12, 0)
+	uncheckAll:SetPoint("TOP", listLabel, "TOP", 0, 6)
+	uncheckAll:SetScript("OnClick", function()
+		SetAllItemRules(false)
+	end)
+
+	local checkAll = CreateButton(rulesInset, L["Check All"], 80)
+	checkAll:SetPoint("RIGHT", uncheckAll, "LEFT", -6, 0)
+	checkAll:SetScript("OnClick", function()
+		SetAllItemRules(true)
+	end)
+
 	-- Scrollable viewport for the pooled rule rows. FillRuleRows lays rows out
 	-- into the scroll child and grows it so every rule is reachable.
 	local ruleScroll, ruleContent = CreateScrollList(rulesInset)
@@ -1466,6 +1491,7 @@ local function PrintHelp()
 	F.Print(L["/ledger stats - show lifetime and today's totals"])
 	F.Print(L["/ledger reset - clear transfer history and stats"])
 	F.Print(L["/ledger debug - explain why items do or don't route"])
+	F.Print(L["/ledger trace - toggle verbose send-pipeline tracing"])
 	F.Print(L["/ledger toggle - enable/disable auto-run on this character"])
 end
 
@@ -1514,6 +1540,8 @@ local function HandleSlash(msg)
 		RefreshRuleEditor()
 	elseif cmd == "debug" then
 		Engine.Debug()
+	elseif cmd == "trace" then
+		Engine.ToggleSendDebug()
 	elseif cmd == "rules" then
 		ToggleRuleWindow()
 	elseif cmd == "toggle" then

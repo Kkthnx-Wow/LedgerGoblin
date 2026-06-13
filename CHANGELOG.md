@@ -5,6 +5,46 @@ All notable changes to **LedgerGoblin** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-12
+
+Focused on hardening the mail send queue for large batches and fixing item
+classification edge cases surfaced in live use.
+
+### Added
+
+- **Check All / Uncheck All** buttons in the Rule Editor for quickly toggling
+  long route lists.
+- **`/ledger trace`** — an opt-in, verbose send-pipeline diagnostic. Off by
+  default; narrates every step of a run (attach results, recipient, the
+  `SendMail` call, and which of success/fail/timeout/lock events arrive) so a
+  stuck batch can be diagnosed instead of guessed at.
+
+### Fixed
+
+- **Warband / account-bound reagents are no longer wrongly blocked.** Items like
+  *Arden Lumber* report an unreliable static bind type; a tooltip-based fallback
+  (`C_TooltipInfo`) now correctly detects warband binding so they route to alts.
+- **Reagent bag is now scanned.** The carry-inventory sweep skipped the reagent
+  bag (container 5), so ore/herbs/lumber stored there reported "nothing to
+  route." It's now included explicitly.
+- **Same-realm mail no longer silently fails.** Addressing a recipient as
+  `Name-OwnRealm` produced no success or failure event; the sender's own realm
+  is now stripped so same-realm mail delivers.
+- **Large batches no longer stall** mid-run requiring the mailbox to be closed
+  and reopened.
+
+### Changed
+
+- **Mail queue is now lock-aware.** It tracks `MAIL_LOCK_SEND_ITEMS` /
+  `MAIL_UNLOCK_SEND_ITEMS` and won't compose into a locked send frame, with a
+  fail-open guard if the unlock event never arrives.
+- **Latency-aware pacing.** The compose-settle and post-send cooldowns now scale
+  with connection latency (with conservative floors) instead of fixed delays, so
+  fast connections stay snappy and laggy ones get more breathing room.
+- **Attachment retries and clean cancellation.** Transient attach failures retry
+  before skipping a chunk, and closing the mailbox mid-run cancels cleanly
+  without leaving stale timers.
+
 ## [1.0.0] - 2026-06-11
 
 First stable release. LedgerGoblin is a complete, rule-based mail routing system
@@ -50,4 +90,5 @@ for sending gold and items to your alts.
   one-in-flight, wait-for-success queue) avoids locked-slot races and rapid-fire
   mailbox issues.
 
+[1.2.0]: https://github.com/Kkthnx-Wow/LedgerGoblin/releases/tag/v1.2.0
 [1.0.0]: https://github.com/Kkthnx-Wow/LedgerGoblin/releases/tag/v1.0.0
