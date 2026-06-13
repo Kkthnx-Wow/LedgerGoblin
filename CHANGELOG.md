@@ -7,6 +7,45 @@ All notable changes to **LedgerGoblin** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-06-13
+
+Focused on visibility: seeing where items will go before you send, reaching the
+addon faster, and clearer feedback when a rule won't do what you expect.
+
+### Added
+
+- **Bag tooltip routing hints.** Hover an item in your bags and the tooltip shows
+  where LedgerGoblin would mail it — the target name in its class colour (and with
+  the realm suffix dropped for same-realm alts), or that the item is excluded. The
+  hint only appears when a rule actually claims the item, so unconfigured items
+  stay quiet. Toggle it under Routing Rules in the settings panel.
+- **Minimap button.** A draggable minimap button (self-rolled, no library): left
+  click opens settings, right-click opens the Rule Editor. Toggle it with
+  `/ledger minimap`; its position is saved account-wide.
+- **Rule Editor search box.** Filter long route lists by itemID, item name, or
+  target — sits on the action-button row with a magnifier icon.
+- **Unknown-target warning.** Adding a rule whose target this account has never
+  seen now prints a heads-up (e.g. catching `Kkthnx-Area52x` typos). It's a soft
+  warning — brand-new alts still work, you just get a nudge to double-check.
+- **Specific "why not" feedback.** When a rule can't be added, the message now
+  says *why* — soulbound to this character, Bind on Pickup, or a quest item —
+  instead of a generic refusal.
+
+### Fixed
+
+- **Category routes no longer look like phantom item rules.** A tooltip hint from
+  a Bind-on-Equip, Warband, or quality rule is now tagged as such, so removing a
+  specific item rule and seeing the item still route (via a category rule) is no
+  longer confusing.
+
+### Changed
+
+- **Lighter tooltip scanning.** The Rule Editor's item-info refresh listener now
+  only runs while the editor is open, instead of waking for every item load in the
+  world all session.
+- **Search icon is flavor-safe.** Falls back to a universal magnifier texture on
+  clients that lack the retail search atlas.
+
 ## [1.2.0] - 2026-06-12
 
 Focused on hardening the mail send queue for large batches and fixing item
@@ -105,5 +144,6 @@ for sending gold and items to your alts.
   one-in-flight, wait-for-success queue) avoids locked-slot races and rapid-fire
   mailbox issues.
 
+[1.3.0]: https://github.com/Kkthnx-Wow/LedgerGoblin/releases/tag/v1.3.0
 [1.2.0]: https://github.com/Kkthnx-Wow/LedgerGoblin/releases/tag/v1.2.0
 [1.0.0]: https://github.com/Kkthnx-Wow/LedgerGoblin/releases/tag/v1.0.0

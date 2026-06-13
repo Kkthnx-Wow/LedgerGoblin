@@ -496,7 +496,9 @@ local function ResolveTarget(itemID, name, quality, bindType, accountBound)
 		if resolver then
 			local target = resolver(db, itemID, name, quality, bindType, accountBound)
 			if target then
-				return target
+				-- Also hand back which category claimed it, so callers (the bag
+				-- tooltip) can tell a specific-item route from a BoE/quality one.
+				return target, ROUTE_ORDER[i]
 			end
 		end
 	end
@@ -1214,6 +1216,45 @@ function Engine.IsItemRoutable(match)
 		return false, clsName, bindType, reason
 	end
 	return true, clsName, bindType
+end
+
+-- Single-item routing preview for the bag tooltip. Mirrors the real run's
+-- decision so the hint never lies: same exclusion check, same routability gate
+-- (which inspects the live copy in your bags), same ResolveTarget pipeline.
+-- Returns one of:
+--   "excluded"                      -- user blacklisted this itemID
+--   "notmailable", nil, reason      -- soulbound / BoP / quest (won't send)
+--   "routed", target, category    -- would mail to `target` via that rule kind
+--                                     (category: "item"/"boe"/"boa"/"quality")
+--   "none"                         -- no rule claims it
+function Engine.PreviewTarget(itemID, link)
+	if not itemID then
+		return "none"
+	end
+	-- Never branch on a secret value (Midnight); bail quietly if the id is one.
+	if issecret and issecret(itemID) then
+		return "none"
+	end
+
+	local db = ns.db
+	if db.exclusions[itemID] then
+		return "excluded"
+	end
+
+	-- routability already weighs the live bag copy's binding when we hold one.
+	local routable, _, _, reason = Engine.IsItemRoutable(itemID)
+	if not routable then
+		return "notmailable", nil, reason
+	end
+
+	local name, bindType = ClassifyItem(itemID, link)
+	local accountBound = IsItemIDAccountBound(itemID, bindType)
+	local quality = select(3, GetItemInfo(link or itemID))
+	local target, category = ResolveTarget(itemID, name, quality, bindType, accountBound)
+	if target then
+		return "routed", target, category
+	end
+	return "none"
 end
 
 -- Diagnostics: print why a run would (or wouldn't) route. Works anywhere - it

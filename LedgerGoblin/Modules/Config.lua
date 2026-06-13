@@ -32,6 +32,7 @@ local CreateFrame = CreateFrame
 local category -- our Settings category handle
 local ruleEditor
 local mailBar -- holder frame for mailbox buttons (repositioned per tab)
+local ruleFilterText = "" -- live Rule Editor search box contents (empty = show all)
 
 -- Confirmation popup for large sends. Engine fills in `text` before showing and
 -- passes the planned jobs through as data so we route exactly what was offered.
@@ -753,6 +754,31 @@ local function AcquireRuleRow(holder, index)
 	return row
 end
 
+-- True when a rule's itemID, resolved item name, raw name-match, or target
+-- contains the (already-lowercased) needle. Plain substring search, no patterns.
+local function RuleMatchesFilter(rule, needle)
+	local target = rule.target
+	if target and target:lower():find(needle, 1, true) then
+		return true
+	end
+	local match = rule.match
+	if type(match) == "number" then
+		if tostring(match):find(needle, 1, true) then
+			return true
+		end
+		local _, _, _, _, link = ItemDisplay(match)
+		local name = link and link:match("%[(.-)%]")
+		if name and name:lower():find(needle, 1, true) then
+			return true
+		end
+	elseif type(match) == "string" then
+		if match:lower():find(needle, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
 local function FillRuleRows(holder, rules)
 	if not holder then
 		return
@@ -766,7 +792,23 @@ local function FillRuleRows(holder, rules)
 		holder.empty = e
 	end
 
-	local n = #rules
+	-- Respect the search filter: collect the real indices we'll show, so each
+	-- row's handlers (toggle/keep/remove) still target the right rule even when
+	-- the visible slots are compacted past hidden ones.
+	local needle = ruleFilterText ~= "" and ruleFilterText:lower() or nil
+	local visible = holder._visible or {}
+	holder._visible = visible
+	wipe(visible)
+	for i = 1, #rules do
+		if not needle or RuleMatchesFilter(rules[i], needle) then
+			visible[#visible + 1] = i
+		end
+	end
+	local n = #visible
+
+	if n == 0 then
+		holder.empty:SetText(needle and L["No rules match your search."] or L["No specific item rules configured."])
+	end
 	holder.empty:SetShown(n == 0)
 
 	-- Match the scroll child's width to its viewport so rows fill it and the
@@ -778,8 +820,9 @@ local function FillRuleRows(holder, rules)
 	end
 	holder:SetWidth(w)
 
-	for i = 1, n do
-		local row = AcquireRuleRow(holder, i)
+	for slot = 1, n do
+		local i = visible[slot]
+		local row = AcquireRuleRow(holder, slot)
 		local rule = rules[i]
 		row.index = i
 		row.rule = rule
@@ -1041,6 +1084,13 @@ local function AddItemRule(matchText, targetText)
 		return
 	end
 
+	-- Soft typo guard: the roster only knows alts that have logged in with the
+	-- addon, so a brand-new alt is legitimately "unknown" - we warn but still add
+	-- rather than block. Catches "Kkthnx-Area52x" style fat-fingers early.
+	if not ns:GetModule("Roster").IsKnown(targetText) then
+		F.Print(L["Heads up: %s isn't a character this account has seen - double-check the spelling."], targetText)
+	end
+
 	ns.db.itemRules[#ns.db.itemRules + 1] = { match = match, target = targetText }
 	F.Print(L["Added item rule: %s -> %s"], FormatMatch(match), targetText)
 	SnapshotCurrentItemRules()
@@ -1197,7 +1247,10 @@ local function BuildEditorContent(frame, anchorTop)
 	AttachTooltip(copyRules, L["Copy"], L["Merge another character's specific item rules into this one. Duplicates are skipped."])
 
 	local addRule = CreateButton(rulesInset, L["Add Rule"], 100)
-	addRule:SetPoint("TOPLEFT", matchInput, "BOTTOMLEFT", 0, -10)
+	-- InputBoxTemplate's left border hangs ~5px left of the editbox's frame, so
+	-- nudge the whole button strip (which chains off this) left to line up with
+	-- the match field's visible edge - and free a touch more room for Search.
+	addRule:SetPoint("TOPLEFT", matchInput, "BOTTOMLEFT", -6, -10)
 	addRule:SetScript("OnClick", function()
 		AddItemRule(matchInput:GetText(), targetInput:GetText())
 		matchInput:SetText("")
@@ -1237,6 +1290,36 @@ local function BuildEditorContent(frame, anchorTop)
 		SetAllItemRules(false)
 	end)
 	AttachTooltip(uncheckAll, L["Uncheck All"], L["Disable every item rule in the list at once (without deleting them)."])
+
+	-- Search/filter box, on the buttons row so the whole strip reads as one line.
+	-- Icon + "Search" sit to the left of the box. Chained left-to-right off
+	-- uncheckAll (single anchors) so it always lands on the same row. Filtering is
+	-- cheap (pooled rows), so we redraw per keypress.
+	local searchIcon = rulesInset:CreateTexture(nil, "OVERLAY")
+	searchIcon:SetSize(14, 14)
+	-- The nice atlas is retail-only; on Classic it'd render blank. Feature-detect
+	-- it and fall back to the magnifier texture file that ships on every flavor.
+	if C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo("common-searchbar-icon-a") then
+		searchIcon:SetAtlas("common-searchbar-icon-a")
+	else
+		searchIcon:SetTexture("Interface\\Common\\UI-Searchbox-Icon")
+	end
+	searchIcon:SetPoint("LEFT", uncheckAll, "RIGHT", 16, 0)
+
+	local searchLabel = CreateLabel(rulesInset, L["Search"], "GameFontDisableSmall")
+	searchLabel:SetPoint("LEFT", searchIcon, "RIGHT", 4, 0)
+
+	local searchBox = CreateInput(rulesInset, 110)
+	searchBox:SetPoint("LEFT", searchLabel, "RIGHT", 6, 0)
+	searchBox:SetText(ruleFilterText)
+	searchBox:SetScript("OnTextChanged", function(self)
+		ruleFilterText = self:GetText() or ""
+		RefreshRuleEditor()
+	end)
+	searchBox:SetScript("OnEscapePressed", function(self)
+		self:SetText("")
+		self:ClearFocus()
+	end)
 
 	-- ---- Card 2: exclusions ----
 	local exclInset = CreateInset(frame)
@@ -1323,7 +1406,7 @@ local function CreateRuleWindow()
 	end
 
 	local close = CreateFrame("Button", nil, win, "UIPanelCloseButton")
-	close:SetPoint("TOPRIGHT", -4, -4)
+	close:SetPoint("TOPRIGHT", -8, -8)
 
 	-- Icon chip + title, then a hairline gold divider that the content hangs off.
 	local icon = win:CreateTexture(nil, "ARTWORK")
@@ -1437,6 +1520,10 @@ local function BuildPanel()
 
 		local s2 = Bind("LG_holdShift", db, "holdShiftToDisable", D.holdShiftToDisable, L["Hold Shift to skip auto-run"])
 		Settings.CreateCheckbox(category, s2, L["Hold Shift to skip auto-run"])
+
+		local sTip = Bind("LG_tooltipHints", db, "tooltipHints", D.tooltipHints, L["Routing hints on tooltips"])
+		Settings.CreateCheckbox(category, sTip, L["Routing hints on tooltips"])
+		AddDesc(layout, L["Hover an item in your bags to see where LedgerGoblin would mail it."])
 
 		local sConfirm = Bind("LG_confirm", db, "confirmThreshold", D.confirmThreshold, L["Confirm large sends"])
 		Settings.CreateSlider(
@@ -1707,6 +1794,7 @@ local function PrintHelp()
 	F.Print(L["/ledger debug - explain why items do or don't route"])
 	F.Print(L["/ledger trace - toggle verbose send-pipeline tracing"])
 	F.Print(L["/ledger toggle - enable/disable auto-run on this character"])
+	F.Print(L["/ledger minimap - show or hide the minimap button"])
 end
 
 local function HandleSlash(msg)
@@ -1758,6 +1846,8 @@ local function HandleSlash(msg)
 		Engine.ToggleSendDebug()
 	elseif cmd == "rules" then
 		ToggleRuleWindow()
+	elseif cmd == "minimap" then
+		ns.ToggleMinimapButton()
 	elseif cmd == "toggle" then
 		ns.db.autoRun = not ns.db.autoRun
 		F.Print(L["Auto-run is now %s on this character."], ns.db.autoRun and L["Enabled"] or L["Disabled"])
@@ -1863,9 +1953,130 @@ function LedgerGoblin_OnAddonCompartmentClick(_, button)
 	end
 end
 
+-- ---------------------------------------------------------------------------
+-- Minimap button (self-rolled; we don't embed LibDBIcon for one button)
+--   Same clicks as the compartment - left opens settings, right the Rule
+--   Editor. Drag it around the ring; the angle saves account-wide.
+-- ---------------------------------------------------------------------------
+
+local minimapButton
+
+local function UpdateMinimapPosition()
+	if not minimapButton then
+		return
+	end
+	local mm = _G["Minimap"]
+	local angle = math.rad(ns.global.minimap.angle or 215)
+	-- Park it just outside the minimap edge, on the ring.
+	local radius = (mm:GetWidth() / 2) + 6
+	minimapButton:SetPoint("CENTER", mm, "CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
+end
+
+-- While dragging, convert the cursor's position (in minimap-local space) into an
+-- angle and re-park the button. Cursor coords are in screen pixels, so divide by
+-- the minimap's effective scale before doing any geometry.
+local function MinimapButton_OnUpdate(self)
+	local mm = _G["Minimap"]
+	local mx, my = mm:GetCenter()
+	local scale = mm:GetEffectiveScale()
+	local px, py = GetCursorPosition()
+	px, py = px / scale, py / scale
+	ns.global.minimap.angle = math.deg(math.atan2(py - my, px - mx))
+	UpdateMinimapPosition()
+end
+
+local function MinimapButton_OnEnter(self)
+	local tip = _G["GameTooltip"]
+	if not tip then
+		return
+	end
+	tip:SetOwner(self, "ANCHOR_LEFT")
+	tip:AddLine(C.Title)
+	tip:AddLine(format(L["Version %s"], ns.version), 0.7, 0.7, 0.7)
+	tip:AddLine(format(L["Auto-run: %s"], ns.db.autoRun and L["Enabled"] or L["Disabled"]), 0.8, 0.8, 0.8)
+	tip:AddLine(" ")
+	tip:AddLine(L["Left-click: open settings."], 0.8, 0.8, 0.8)
+	tip:AddLine(L["Right-click: open Rule Editor."], 0.8, 0.8, 0.8)
+	tip:AddLine(L["Drag: move this button."], 0.8, 0.8, 0.8)
+	tip:Show()
+end
+
+local function CreateMinimapButton()
+	local mm = _G["Minimap"]
+	if not mm or minimapButton then
+		return
+	end
+
+	local b = CreateFrame("Button", "LedgerGoblinMinimapButton", mm)
+	b:SetSize(31, 31)
+	b:SetFrameStrata("MEDIUM")
+	b:SetFrameLevel(8)
+	b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	b:RegisterForDrag("LeftButton")
+	b:SetMovable(true)
+
+	local bg = b:CreateTexture(nil, "BACKGROUND")
+	bg:SetSize(20, 20)
+	bg:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
+	bg:SetPoint("CENTER", 0, 1)
+
+	local icon = b:CreateTexture(nil, "ARTWORK")
+	icon:SetSize(19, 19)
+	icon:SetTexture(C.Icon)
+	-- Trim the square art so it sits inside the round border, not under it.
+	icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	icon:SetPoint("CENTER", 0, 1)
+
+	local overlay = b:CreateTexture(nil, "OVERLAY")
+	overlay:SetSize(53, 53)
+	overlay:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+	overlay:SetPoint("TOPLEFT")
+
+	b:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+
+	b:SetScript("OnEnter", MinimapButton_OnEnter)
+	b:SetScript("OnLeave", function()
+		local tip = _G["GameTooltip"]
+		if tip then
+			tip:Hide()
+		end
+	end)
+	b:SetScript("OnClick", function(_, button)
+		if button == "RightButton" then
+			ToggleRuleWindow(true)
+		else
+			OpenSettings()
+		end
+	end)
+	b:SetScript("OnDragStart", function(self)
+		self:SetScript("OnUpdate", MinimapButton_OnUpdate)
+	end)
+	b:SetScript("OnDragStop", function(self)
+		self:SetScript("OnUpdate", nil)
+	end)
+
+	minimapButton = b
+	UpdateMinimapPosition()
+	if ns.global.minimap.hide then
+		b:Hide()
+	end
+end
+
+-- Slash + settings entry point to show/hide the button without losing its spot.
+local function ToggleMinimapButton()
+	local m = ns.global.minimap
+	m.hide = not m.hide
+	if minimapButton then
+		minimapButton:SetShown(not m.hide)
+	end
+	F.Print(m.hide and L["Minimap button hidden; /ledger minimap to show it again."] or L["Minimap button shown."])
+end
+ns.ToggleMinimapButton = ToggleMinimapButton
+
 ns:OnInit(function()
 	BuildPanel()
 	SnapshotCurrentItemRules()
+	CreateMinimapButton()
 
 	ns:RegisterEvent("MAIL_SHOW", CreateMailboxButtons)
 

@@ -107,6 +107,7 @@ C.CHAR_DEFAULTS = {
 	autoRun = false, -- OFF by default: mail transfers are irreversible
 	holdShiftToDisable = true, -- when autoRun is on, Shift skips a given open
 	confirmThreshold = 1000, -- gold value above which a send asks for confirmation
+	tooltipHints = true, -- show "routes to X" on bag item tooltips
 
 	gold = {
 		enabled = false,
@@ -170,4 +171,8 @@ C.GLOBAL_DEFAULTS = {
 	-- Account-wide lifetime count of confirmed mails sent, surfaced in each mail's
 	-- subject line ("...#N"). Incremented only on MAIL_SEND_SUCCESS.
 	sendCount = 0,
+
+	-- Self-rolled minimap button: where it sits on the ring (degrees) and whether
+	-- it's hidden. Account-wide so the button lives in the same spot everywhere.
+	minimap = { angle = 215, hide = false },
 }
