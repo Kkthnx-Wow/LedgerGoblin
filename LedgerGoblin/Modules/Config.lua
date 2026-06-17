@@ -67,6 +67,237 @@ _G["StaticPopupDialogs"]["LEDGERGOBLIN_CONFIRM_RESET"] = {
 	preferredIndex = 3,
 }
 
+-- Normalize, validate, and store a hand-typed cross-account target. Shared by the
+-- add popup, the Pick menu, and the slash command so the rules stay in one place.
+function ns.AddManualAltFromText(raw)
+	local target = F.NormalizeTarget(raw)
+	if not target then
+		F.Print(L["Enter a target character."])
+		return
+	end
+	local Roster = ns:GetModule("Roster")
+	if Roster.IsKnown(target) then
+		F.Print(L["%s is already a known mail target."], target)
+		return
+	end
+	Roster.AddManual(target)
+	F.Print(L["Added cross-account alt: %s. Auto-run will ask before mailing it."], target)
+	-- Defined later in this file; reach it via _G since we're above its definition.
+	if _G["RefreshRuleEditor"] then
+		_G["RefreshRuleEditor"]()
+	end
+end
+
+-- Export EVERY character this account knows - the auto-detected roster (incl. the
+-- current toon) plus any manual cross-account alts - so the list can seed another
+-- account in one paste. Plain readable text (semicolon-joined), deduped + sorted.
+function ns.ExportManualAlts()
+	local Roster = ns:GetModule("Roster")
+	local seen, out = {}, {}
+	local function collect(list)
+		for i = 1, #list do
+			local key = list[i]
+			if key and key ~= "" and not seen[key] then
+				seen[key] = true
+				out[#out + 1] = key
+			end
+		end
+	end
+	collect(Roster.List(true)) -- every character seen on this account, incl. self
+	collect(Roster.ManualList()) -- plus cross-account alts already added here
+	table.sort(out)
+	return table.concat(out, "; ")
+end
+
+-- Parse a pasted/typed list and add each valid, not-yet-known target. Tokens may
+-- be split by ';', ',', or newlines so almost any paste shape works.
+function ns.ImportManualAlts(raw)
+	if type(raw) ~= "string" then
+		return
+	end
+	local Roster = ns:GetModule("Roster")
+	local added, skipped = 0, 0
+	for token in raw:gmatch("[^;,\r\n]+") do
+		local target = F.NormalizeTarget(token)
+		if target then
+			if Roster.IsKnown(target) then
+				skipped = skipped + 1
+			else
+				Roster.AddManual(target)
+				added = added + 1
+			end
+		end
+	end
+	F.Print(L["Imported %d cross-account alt(s) (%d already known)."], added, skipped)
+	if _G["RefreshRuleEditor"] then
+		_G["RefreshRuleEditor"]()
+	end
+end
+
+-- Open the export popup (or say there's nothing to export).
+function ns.ShowExportManualAlts()
+	local str = ns.ExportManualAlts()
+	if str == "" then
+		F.Print(L["No characters to export yet."])
+		return
+	end
+	_G["StaticPopup_Show"]("LEDGERGOBLIN_EXPORT_ALTS", nil, nil, { text = str })
+end
+
+-- StaticPopup grew accessor methods on retail (dialog:GetEditBox/GetButton1) but
+-- Classic still exposes the .editBox/.button1 fields. Support both so the dialog
+-- works on every flavor.
+local function PopupEditBox(dialog)
+	if dialog.GetEditBox then
+		return dialog:GetEditBox()
+	end
+	return dialog.editBox
+end
+
+local function PopupButton1(dialog)
+	if dialog.GetButton1 then
+		return dialog:GetButton1()
+	end
+	return dialog.button1
+end
+
+-- Deliberately heavy: the API can't confirm a cross-account name exists, so the
+-- user has to type it themselves (no one-click fat-finger to a stranger). Accept
+-- stays disabled until the box has text; the warning copy carries the friction.
+_G["StaticPopupDialogs"]["LEDGERGOBLIN_ADD_MANUAL_ALT"] = {
+	text = L["Add a cross-account mail target. Type the EXACT character name as Name-Realm.\n\nMail is irreversible - a typo can send your gold and items to a stranger. Only add characters you own.\n\nYou take full responsibility: LedgerGoblin and its author (Kkthnx) are not liable for any gold or items lost to manual targets."],
+	button1 = _G["ACCEPT"] or "Accept",
+	button2 = _G["CANCEL"] or "Cancel",
+	hasEditBox = true,
+	editBoxWidth = 220,
+	OnShow = function(self, data)
+		local eb = PopupEditBox(self)
+		if eb then
+			eb:SetText((data and data.prefill) or (self.data and self.data.prefill) or "")
+			eb:HighlightText()
+			eb:SetFocus()
+		end
+		local b1 = PopupButton1(self)
+		if b1 then
+			b1:Disable()
+		end
+	end,
+	EditBoxOnTextChanged = function(self)
+		local dialog = self:GetParent()
+		local b1 = dialog and PopupButton1(dialog)
+		if not b1 then
+			return
+		end
+		if ((self:GetText() or ""):gsub("%s", "")) ~= "" then
+			b1:Enable()
+		else
+			b1:Disable()
+		end
+	end,
+	EditBoxOnEnterPressed = function(self)
+		local dialog = self:GetParent()
+		local b1 = dialog and PopupButton1(dialog)
+		if b1 and b1:IsEnabled() then
+			ns.AddManualAltFromText(self:GetText())
+			dialog:Hide()
+		end
+	end,
+	EditBoxOnEscapePressed = function(self)
+		self:GetParent():Hide()
+	end,
+	OnAccept = function(self)
+		local eb = PopupEditBox(self)
+		if eb then
+			ns.AddManualAltFromText(eb:GetText())
+		end
+	end,
+	timeout = 0,
+	whileDead = true,
+	hideOnEscape = true,
+	showAlert = true,
+	preferredIndex = 3,
+}
+
+-- Export: pre-filled, highlighted edit box the user copies with Ctrl+C.
+_G["StaticPopupDialogs"]["LEDGERGOBLIN_EXPORT_ALTS"] = {
+	text = L["Copy this list with Ctrl+C, then import it on another account. Duplicates are skipped on import."],
+	button1 = _G["CLOSE"] or "Close",
+	hasEditBox = true,
+	editBoxWidth = 350,
+	OnShow = function(self, data)
+		local eb = PopupEditBox(self)
+		if eb then
+			eb:SetText((data and data.text) or (self.data and self.data.text) or "")
+			eb:HighlightText()
+			eb:SetFocus()
+		end
+	end,
+	EditBoxOnEnterPressed = function(self)
+		self:GetParent():Hide()
+	end,
+	EditBoxOnEscapePressed = function(self)
+		self:GetParent():Hide()
+	end,
+	timeout = 0,
+	whileDead = true,
+	hideOnEscape = true,
+	preferredIndex = 3,
+}
+
+-- Import: paste a list, Accept adds every valid, not-yet-known target at once.
+_G["StaticPopupDialogs"]["LEDGERGOBLIN_IMPORT_ALTS"] = {
+	text = L["Paste a cross-account alt list with Ctrl+V, then Accept.\n\nYou take full responsibility: only import characters you own."],
+	button1 = _G["ACCEPT"] or "Accept",
+	button2 = _G["CANCEL"] or "Cancel",
+	hasEditBox = true,
+	editBoxWidth = 350,
+	OnShow = function(self)
+		local eb = PopupEditBox(self)
+		if eb then
+			eb:SetText("")
+			eb:SetFocus()
+		end
+		local b1 = PopupButton1(self)
+		if b1 then
+			b1:Disable()
+		end
+	end,
+	EditBoxOnTextChanged = function(self)
+		local dialog = self:GetParent()
+		local b1 = dialog and PopupButton1(dialog)
+		if not b1 then
+			return
+		end
+		if ((self:GetText() or ""):gsub("%s", "")) ~= "" then
+			b1:Enable()
+		else
+			b1:Disable()
+		end
+	end,
+	EditBoxOnEnterPressed = function(self)
+		local dialog = self:GetParent()
+		local b1 = dialog and PopupButton1(dialog)
+		if b1 and b1:IsEnabled() then
+			ns.ImportManualAlts(self:GetText())
+			dialog:Hide()
+		end
+	end,
+	EditBoxOnEscapePressed = function(self)
+		self:GetParent():Hide()
+	end,
+	OnAccept = function(self)
+		local eb = PopupEditBox(self)
+		if eb then
+			ns.ImportManualAlts(eb:GetText())
+		end
+	end,
+	timeout = 0,
+	whileDead = true,
+	hideOnEscape = true,
+	showAlert = true,
+	preferredIndex = 3,
+}
+
 -- Build the dynamic list of mail targets: "None" plus every known alt, each
 -- coloured by class. Evaluated fresh each time a dropdown opens.
 local function TargetOptions()
@@ -76,6 +307,12 @@ local function TargetOptions()
 	local list = Roster.List(false)
 	for i = 1, #list do
 		local key = list[i]
+		container:Add(key, "|c" .. Roster.ClassHex(key) .. key .. "|r")
+	end
+	-- Manual cross-account alts are valid targets too, so offer them here.
+	local manual = Roster.ManualList()
+	for i = 1, #manual do
+		local key = manual[i]
 		container:Add(key, "|c" .. Roster.ClassHex(key) .. key .. "|r")
 	end
 	return container:GetData()
@@ -402,16 +639,41 @@ local function ShowTargetMenu(owner, box)
 		root:CreateTitle(L["Target character"])
 		local Roster = ns:GetModule("Roster")
 		local list = Roster.List(false)
-		if #list == 0 then
-			root:CreateButton(L["No known characters yet. Log into an alt once so LedgerGoblin can see it."], function() end)
-			return
-		end
 		for i = 1, #list do
 			local key = list[i]
 			root:CreateButton("|c" .. Roster.ClassHex(key) .. key .. "|r", function()
 				box:SetText(key)
 			end)
 		end
+
+		-- Cross-account alts the game can't auto-detect, listed separately so they
+		-- read as "you vouched for these" rather than verified alts.
+		local manual = Roster.ManualList()
+		if #manual > 0 then
+			root:CreateDivider()
+			root:CreateTitle(L["Cross-account alts"])
+			for i = 1, #manual do
+				local key = manual[i]
+				root:CreateButton("|c" .. Roster.ClassHex(key) .. key .. "|r", function()
+					box:SetText(key)
+				end)
+			end
+		end
+
+		if #list == 0 and #manual == 0 then
+			root:CreateButton(L["No known characters yet. Log into an alt once so LedgerGoblin can see it."], function() end)
+		end
+
+		root:CreateDivider()
+		root:CreateButton(L["Add cross-account alt..."], function()
+			_G["StaticPopup_Show"]("LEDGERGOBLIN_ADD_MANUAL_ALT")
+		end)
+		root:CreateButton(L["Import cross-account alts..."], function()
+			_G["StaticPopup_Show"]("LEDGERGOBLIN_IMPORT_ALTS")
+		end)
+		root:CreateButton(L["Export cross-account alts..."], function()
+			ns.ShowExportManualAlts()
+		end)
 	end)
 end
 
@@ -1018,6 +1280,14 @@ local function FillExclusionChips(holder)
 end
 
 function RefreshRuleEditor()
+	-- Rules/exclusions just changed, so the tooltip routing cache is stale.
+	ns:GetModule("Engine").WipePreviewCache()
+	-- Keep the mailbox Send button's enabled state honest if rules are edited
+	-- while the mailbox is open.
+	if ns.UpdateMailButtons then
+		ns.UpdateMailButtons()
+	end
+
 	if not ruleEditor then
 		return
 	end
@@ -1168,6 +1438,10 @@ local function CreateScrollList(parent)
 	scroll:EnableMouseWheel(true)
 	scroll:SetScript("OnMouseWheel", function(self, delta)
 		local cur = self:GetVerticalScroll()
+		-- 12.0.7: ScrollOffset can be a Secret aspect on some frames; never math it.
+		if F.IsSecret(cur) then
+			return
+		end
 		local maxScroll = self:GetVerticalScrollRange()
 		local new = cur - delta * (ROW_HEIGHT * 2)
 		if new < 0 then
@@ -1525,8 +1799,11 @@ local function BuildPanel()
 		Settings.CreateCheckbox(category, sTip, L["Routing hints on tooltips"])
 		AddDesc(layout, L["Hover an item in your bags to see where LedgerGoblin would mail it."])
 
+		local sCGold = Bind("LG_confirmGold", db, "confirmGold", D.confirmGold, L["Confirm gold sends"])
+		local cgInit = Settings.CreateCheckbox(category, sCGold, L["Confirm gold sends"])
+
 		local sConfirm = Bind("LG_confirm", db, "confirmThreshold", D.confirmThreshold, L["Confirm large sends"])
-		Settings.CreateSlider(
+		local sliderInit = Settings.CreateSlider(
 			category,
 			sConfirm,
 			SliderOptions(0, 20000, 250, function(v)
@@ -1534,7 +1811,12 @@ local function BuildPanel()
 			end),
 			L["Ask before sending if a run would move at least this much gold. Set to 0 to never ask."]
 		)
+		DependsOn(sliderInit, cgInit)
 		AddDesc(layout, L["Ask before sending if a run would move at least this much gold. Set to 0 to never ask."])
+
+		local sCItems = Bind("LG_confirmItems", db, "confirmItems", D.confirmItems, L["Confirm item sends"])
+		Settings.CreateCheckbox(category, sCItems, L["Confirm item sends"])
+		AddDesc(layout, L["Ask before any run that attaches items, regardless of value."])
 	end
 
 	-- Gold
@@ -1717,6 +1999,8 @@ local function UpdateMailButtons()
 	end
 	mailBar.send:SetEnabled(ns:GetModule("Engine").HasAnyRule())
 end
+-- Exposed so RefreshRuleEditor (defined earlier) can keep the Send button honest.
+ns.UpdateMailButtons = UpdateMailButtons
 
 -- LedgerGoblin's mailbox toolbar: a styled strip attached just ABOVE the mail
 -- frame, centered. The same spot is clear on both tabs (no overlap with the
@@ -1795,6 +2079,7 @@ local function PrintHelp()
 	F.Print(L["/ledger trace - toggle verbose send-pipeline tracing"])
 	F.Print(L["/ledger toggle - enable/disable auto-run on this character"])
 	F.Print(L["/ledger minimap - show or hide the minimap button"])
+	F.Print(L["/ledger alt add|remove|list|export|import - manage cross-account mail targets"])
 end
 
 local function HandleSlash(msg)
@@ -1846,6 +2131,43 @@ local function HandleSlash(msg)
 		Engine.ToggleSendDebug()
 	elseif cmd == "rules" then
 		ToggleRuleWindow()
+	elseif cmd == "alt" then
+		-- /ledger alt add <Name-Realm> | remove <Name-Realm> | list
+		local action, tail = rest:match("^(%S*)%s*(.-)$")
+		action = (action or ""):lower()
+		local Roster = ns:GetModule("Roster")
+		if action == "add" then
+			_G["StaticPopup_Show"]("LEDGERGOBLIN_ADD_MANUAL_ALT", nil, nil, { prefill = tail })
+		elseif action == "remove" then
+			local target = F.NormalizeTarget(tail)
+			if target and Roster.IsManual(target) then
+				Roster.RemoveManual(target)
+				F.Print(L["Removed cross-account alt: %s"], target)
+				RefreshRuleEditor()
+			else
+				F.Print(L["Usage: /ledger alt remove <Name-Realm>"])
+			end
+		elseif action == "list" then
+			local manual = Roster.ManualList()
+			if #manual == 0 then
+				F.Print(L["No cross-account alts added."])
+			else
+				F.Print(L["Cross-account alts:"])
+				for i = 1, #manual do
+					F.Print("  " .. manual[i])
+				end
+			end
+		elseif action == "export" then
+			ns.ShowExportManualAlts()
+		elseif action == "import" then
+			if tail ~= "" then
+				ns.ImportManualAlts(tail)
+			else
+				_G["StaticPopup_Show"]("LEDGERGOBLIN_IMPORT_ALTS")
+			end
+		else
+			F.Print(L["Usage: /ledger alt add|remove|list|export|import <Name-Realm>"])
+		end
 	elseif cmd == "minimap" then
 		ns.ToggleMinimapButton()
 	elseif cmd == "toggle" then

@@ -7,6 +7,43 @@ All notable changes to **LedgerGoblin** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-06-16
+
+Cross-account support, safer confirmations, and hardening for patch 12.0.7.
+
+### Added
+
+- **Cross-account alt whitelist.** Characters on a second WoW account can be added
+  manually so they pass the "known target" safety gate — no more editing Lua.
+  Manage them from the Rule Editor **Pick** menu or `/ledger alt add|remove|list`.
+- **Heavy add-time confirmation.** Adding a cross-account alt opens a type-to-
+  confirm dialog with irreversibility and liability copy before the name is saved.
+- **Auto-run gate for cross-account alts.** Unattended mailbox auto-run now asks
+  before mailing a hand-added target; manual `/ledger send` is still trusted.
+- **Separate gold vs item confirm toggles.** **Confirm gold sends** (with the
+  existing threshold slider) and **Confirm item sends** are independent settings.
+- **Export / import character lists.** Export every character this account knows
+  (auto-detected roster + manual alts) as plain text; paste on another account to
+  seed its whitelist. Duplicates are skipped on import. Available from the **Pick**
+  menu and `/ledger alt export|import`.
+
+### Fixed
+
+- **Keep-reserve no longer over-sends.** On clients without `SplitContainerItem`,
+  a partial keep now leaves the stack in the bag instead of mailing the whole
+  stack.
+- **Tooltip routing hints are cached.** Hovering bag items no longer re-scans all
+  bags on every tooltip; the cache clears when bags or rules change.
+- **Send button stays honest.** Editing rules while the mailbox is open now
+  refreshes the toolbar Send button's enabled state.
+
+### Changed
+
+- **Combat feedback on manual send.** `/ledger send` and the Send button now
+  print a message when blocked during combat (auto-run stays silent).
+- **12.0.7 alignment.** Central `F.IsSecret` / `F.NotSecret` helpers, guarded
+  roster gold snapshot, and scroll-wheel bail-out when scroll position is Secret.
+
 ## [1.3.0] - 2026-06-13
 
 Focused on visibility: seeing where items will go before you send, reaching the
@@ -144,6 +181,7 @@ for sending gold and items to your alts.
   one-in-flight, wait-for-success queue) avoids locked-slot races and rapid-fire
   mailbox issues.
 
+[1.4.0]: https://github.com/Kkthnx-Wow/LedgerGoblin/releases/tag/v1.4.0
 [1.3.0]: https://github.com/Kkthnx-Wow/LedgerGoblin/releases/tag/v1.3.0
 [1.2.0]: https://github.com/Kkthnx-Wow/LedgerGoblin/releases/tag/v1.2.0
 [1.0.0]: https://github.com/Kkthnx-Wow/LedgerGoblin/releases/tag/v1.0.0

@@ -42,7 +42,6 @@ local SendMailFrame_Update = _G["SendMailFrame_Update"]
 local ClearCursor = ClearCursor
 local InCombatLockdown = InCombatLockdown
 local PanelTemplates_GetSelectedTab = _G["PanelTemplates_GetSelectedTab"]
-local issecret = _G["issecretvalue"] -- Midnight only; nil elsewhere (guards handle it)
 local IsShiftKeyDown = IsShiftKeyDown
 local strlower = string.lower
 local format = string.format
@@ -194,14 +193,7 @@ local function TraceComposeState(label)
 	local subjectBox = _G["SendMailSubjectEditBox"]
 	local nameText = nameBox and nameBox.GetText and nameBox:GetText() or nil
 	local subjectText = subjectBox and subjectBox.GetText and subjectBox:GetText() or nil
-	trace(
-		"  compose %s: to=%q subject=%q canSend=%s price=%s",
-		label,
-		tostring(nameText or ""),
-		tostring(subjectText or ""),
-		tostring(SafeCanSend()),
-		tostring(GetSendMailPrice and GetSendMailPrice())
-	)
+	trace("  compose %s: to=%q subject=%q canSend=%s price=%s", label, tostring(nameText or ""), tostring(subjectText or ""), tostring(SafeCanSend()), tostring(GetSendMailPrice and GetSendMailPrice()))
 end
 
 function Engine.SetSendDebug(on)
@@ -592,7 +584,7 @@ local function ScanBags()
 				local itemID = info.itemID
 				-- Secret-value guard (Midnight): never branch on a secret. At a
 				-- mailbox these are plain, but the check is one cheap call.
-				local safe = not (issecret and (issecret(quality) or issecret(itemID)))
+				local safe = F.NotSecret(quality) and F.NotSecret(itemID)
 				if safe then
 					local name, bindType = ClassifyItem(itemID, info.hyperlink)
 					-- Only bound items need the tooltip fallback; unbound stuff (incl.
@@ -653,7 +645,7 @@ ns:RegisterEvent("MERCHANT_SHOW", function()
 	end
 	local cost = GetRepairAllCost and GetRepairAllCost()
 	local me = ns.State.playerName
-	if me and cost and cost > 0 and not (issecret and issecret(cost)) then
+	if me and cost and cost > 0 and F.NotSecret(cost) then
 		ns.global.repairCost[me] = cost
 	end
 end)
@@ -706,7 +698,7 @@ local function BuildPlan()
 	-- never do the arithmetic on a secret value.
 	local gold = db.gold
 	local current = GetMoney()
-	local moneyReadable = not (issecret and issecret(current))
+	local moneyReadable = F.NotSecret(current)
 	if moneyReadable and gold.enabled and gold.target and gold.target ~= "" then
 		local goldTarget = gold.target
 		if goldTarget == me then
@@ -909,45 +901,72 @@ ProcessNext = function()
 		ClearSendMail()
 	end
 
+	local attached = 0
 	for i = 1, #job.items do
 		local it = job.items[i]
 		local sendCount = it.sendCount or it.count or 1
+		local needsPartial = sendCount < (it.count or 1)
 		-- Partial stack (keep-N reserve): split the surplus onto the cursor and
 		-- leave the kept remainder in the bag. Full stacks pick up whole.
-		if sendCount < (it.count or 1) and SplitContainerItem then
-			SplitContainerItem(it.bag, it.slot, sendCount)
-		else
-			PickupContainerItem(it.bag, it.slot)
-		end
-		ClickSendMailItemButton(i)
-		if GetSendMailItem then
-			local attachedName = GetSendMailItem(i)
-			trace("  attach slot %d: %s (bag %s slot %s) -> GetSendMailItem=%s", i, tostring(it.link or it.name), tostring(it.bag), tostring(it.slot), tostring(attachedName))
-			if not attachedName then
-				if ClearSendMail then
-					ClearSendMail()
-				end
-				ClearCursor()
-				job.attachRetries = (job.attachRetries or 0) + 1
-				trace("  attach FAILED (retry %d/%d)", job.attachRetries, MAX_ATTACH_RETRIES)
-				if job.attachRetries <= MAX_ATTACH_RETRIES then
-					-- No SendMail happened yet, so retrying this same chunk is safe.
-					-- Usually this is a momentary item lock/server lag tantrum.
-					ns:After(ATTACH_RETRY_DELAY_SECONDS, function()
-						if ns.State.sending and queue.jobs == jobs and queue.index <= #jobs then
-							ProcessNext()
-						end
-					end)
-				else
-					F.Print(L["Skipped mail to %s: could not attach %s."], job.target, it.link or it.name or "?")
-					queue.index = queue.index + 1
-					ProcessNext()
-				end
-				return
+		if needsPartial and not SplitContainerItem then
+			-- No SplitContainerItem on this client: a plain pickup would mail the
+			-- WHOLE stack, the opposite of a keep reserve and irreversible. Keep it
+			-- in the bag instead and say so once per job.
+			trace("  attach slot %d: partial keep needed but no SplitContainerItem; keeping stack", i)
+			if not job.keptPartial then
+				job.keptPartial = true
+				F.Print(L["Kept some items: this client can't split a stack for a keep reserve."])
 			end
 		else
-			trace("  attach slot %d: %s (no GetSendMailItem API - cannot verify)", i, tostring(it.link or it.name))
+			if needsPartial then
+				SplitContainerItem(it.bag, it.slot, sendCount)
+			else
+				PickupContainerItem(it.bag, it.slot)
+			end
+			ClickSendMailItemButton(i)
+			if GetSendMailItem then
+				local attachedName = GetSendMailItem(i)
+				trace("  attach slot %d: %s (bag %s slot %s) -> GetSendMailItem=%s", i, tostring(it.link or it.name), tostring(it.bag), tostring(it.slot), tostring(attachedName))
+				if not attachedName then
+					if ClearSendMail then
+						ClearSendMail()
+					end
+					ClearCursor()
+					job.attachRetries = (job.attachRetries or 0) + 1
+					trace("  attach FAILED (retry %d/%d)", job.attachRetries, MAX_ATTACH_RETRIES)
+					if job.attachRetries <= MAX_ATTACH_RETRIES then
+						-- No SendMail happened yet, so retrying this same chunk is safe.
+						-- Usually this is a momentary item lock/server lag tantrum.
+						ns:After(ATTACH_RETRY_DELAY_SECONDS, function()
+							if ns.State.sending and queue.jobs == jobs and queue.index <= #jobs then
+								ProcessNext()
+							end
+						end)
+					else
+						F.Print(L["Skipped mail to %s: could not attach %s."], job.target, it.link or it.name or "?")
+						queue.index = queue.index + 1
+						ProcessNext()
+					end
+					return
+				end
+			else
+				trace("  attach slot %d: %s (no GetSendMailItem API - cannot verify)", i, tostring(it.link or it.name))
+			end
+			attached = attached + 1
 		end
+	end
+
+	-- If a keep reserve left nothing to attach (and no gold rides along), there's
+	-- no mail to send - advance rather than firing an empty letter.
+	if attached == 0 and (not job.money or job.money == 0) then
+		trace("  nothing to attach for %s after keep-reserve; skipping job", tostring(job.target))
+		if ClearSendMail then
+			ClearSendMail()
+		end
+		ClearCursor()
+		queue.index = queue.index + 1
+		ProcessNext()
+		return
 	end
 
 	if job.money and job.money > 0 then
@@ -962,7 +981,7 @@ ProcessNext = function()
 	-- BuildPlan already validated total funds; this just catches mid-run changes.
 	local needed = POSTAGE + (job.money or 0)
 	local money = GetMoney()
-	if not (issecret and issecret(money)) and needed > money then
+	if F.NotSecret(money) and needed > money then
 		if ClearSendMail then
 			ClearSendMail()
 		end
@@ -986,13 +1005,7 @@ ProcessNext = function()
 	-- enough, but populating the field keeps Blizzard's send-validation happy and
 	-- makes the open mail readable if a run ever stalls.
 	local nameBox, subjectBox = PrepareComposeFields(recipient, job.subject)
-	trace(
-		"  recipient: job.target=%s -> SendMail recipient=%s | nameBox=%s subjectBox=%s",
-		tostring(job.target),
-		tostring(recipient),
-		nameBox and "found" or "MISSING",
-		subjectBox and "found" or "MISSING"
-	)
+	trace("  recipient: job.target=%s -> SendMail recipient=%s | nameBox=%s subjectBox=%s", tostring(job.target), tostring(recipient), nameBox and "found" or "MISSING", subjectBox and "found" or "MISSING")
 	TraceComposeState("after fields")
 	local myToken = queue.token + 1
 	queue.token = myToken
@@ -1055,7 +1068,47 @@ end
 
 -- Manual / auto routing run. Returns false (with a printed reason) if it can't
 -- start. Large sends (over the gold threshold) ask for confirmation first.
-function Engine.Run()
+-- Decide whether a run needs a confirmation popup, returning the prompt text (or
+-- nil to send straight away). Three independent gates:
+--   1. Auto-run that includes a hand-added cross-account alt - always confirm,
+--      since those bypass auto-detection and an unattended run shouldn't fire
+--      blind at a name the game can't vouch for. (Manual /ledger send is trusted.)
+--   2. Gold gate: confirmGold + plan moves >= confirmThreshold gold.
+--   3. Item gate: confirmItems + the plan attaches any items.
+local function ConfirmReason(jobs, isAuto)
+	local db = ns.db
+	local Roster = ns:GetModule("Roster")
+	local value = PlanValue(jobs)
+
+	if isAuto then
+		for i = 1, #jobs do
+			if Roster.IsManual(jobs[i].target) then
+				return format(L["Auto-run wants to mail the cross-account alt '%s'. Send %s across %d mail(s)?"], jobs[i].target, F.Money(value), #jobs)
+			end
+		end
+	end
+
+	if db.confirmGold then
+		local threshold = (db.confirmThreshold or 0) * C.COPPER_PER_GOLD
+		if threshold > 0 and value >= threshold then
+			return format(L["Send %s and %d mail(s) now?"], F.Money(value), #jobs)
+		end
+	end
+
+	if db.confirmItems then
+		for i = 1, #jobs do
+			if jobs[i].items and #jobs[i].items > 0 then
+				return format(L["This run attaches items across %d mail(s). Send now?"], #jobs)
+			end
+		end
+	end
+
+	return nil
+end
+
+-- `isAuto` is true only for the unattended mailbox-open run; manual sends
+-- (/ledger send, the Send button) pass nothing and skip the manual-alt gate.
+function Engine.Run(isAuto)
 	if not ns.State.mailboxOpen then
 		F.Print(L["Open a mailbox first."])
 		return false
@@ -1065,6 +1118,11 @@ function Engine.Run()
 		return false
 	end
 	if InCombatLockdown() then
+		-- Auto-run stays silent (it'll retry on the next open); a manual send should
+		-- tell the user why nothing happened.
+		if not isAuto then
+			F.Print(L["Can't route mail during combat."])
+		end
 		return false
 	end
 
@@ -1079,13 +1137,11 @@ function Engine.Run()
 		return false
 	end
 
-	-- Confirmation gate for big gold moves.
-	local value = PlanValue(jobs)
-	local threshold = (ns.db.confirmThreshold or 0) * C.COPPER_PER_GOLD
-	if threshold > 0 and value >= threshold then
+	local prompt = ConfirmReason(jobs, isAuto)
+	if prompt then
 		local dialog = _G["StaticPopupDialogs"]["LEDGERGOBLIN_CONFIRM_SEND"]
 		if dialog then
-			dialog.text = format(L["Send %s and %d mail(s) now?"], F.Money(value), #jobs)
+			dialog.text = prompt
 			_G["StaticPopup_Show"]("LEDGERGOBLIN_CONFIRM_SEND", nil, nil, { jobs = jobs })
 			return true
 		end
@@ -1227,34 +1283,52 @@ end
 --   "routed", target, category    -- would mail to `target` via that rule kind
 --                                     (category: "item"/"boe"/"boa"/"quality")
 --   "none"                         -- no rule claims it
+-- PreviewTarget runs from the item tooltip - a hot, mouse-driven path that would
+-- otherwise re-scan bags and re-resolve rules on every hover. Memoize the result
+-- per itemID; wipe it when bags change (live binding can change) or when rules /
+-- exclusions are edited (RefreshRuleEditor calls WipePreviewCache).
+local previewCache = {}
+
+function Engine.WipePreviewCache()
+	wipe(previewCache)
+end
+
 function Engine.PreviewTarget(itemID, link)
 	if not itemID then
 		return "none"
 	end
 	-- Never branch on a secret value (Midnight); bail quietly if the id is one.
-	if issecret and issecret(itemID) then
+	if F.IsSecret(itemID) then
 		return "none"
 	end
 
+	local cached = previewCache[itemID]
+	if cached then
+		return cached[1], cached[2], cached[3]
+	end
+
+	local status, target, category = "none", nil, nil
 	local db = ns.db
 	if db.exclusions[itemID] then
-		return "excluded"
+		status = "excluded"
+	else
+		-- routability already weighs the live bag copy's binding when we hold one.
+		local routable, _, _, reason = Engine.IsItemRoutable(itemID)
+		if not routable then
+			status, category = "notmailable", reason
+		else
+			local name, bindType = ClassifyItem(itemID, link)
+			local accountBound = IsItemIDAccountBound(itemID, bindType)
+			local quality = select(3, GetItemInfo(link or itemID))
+			local resolved, cat = ResolveTarget(itemID, name, quality, bindType, accountBound)
+			if resolved then
+				status, target, category = "routed", resolved, cat
+			end
+		end
 	end
 
-	-- routability already weighs the live bag copy's binding when we hold one.
-	local routable, _, _, reason = Engine.IsItemRoutable(itemID)
-	if not routable then
-		return "notmailable", nil, reason
-	end
-
-	local name, bindType = ClassifyItem(itemID, link)
-	local accountBound = IsItemIDAccountBound(itemID, bindType)
-	local quality = select(3, GetItemInfo(link or itemID))
-	local target, category = ResolveTarget(itemID, name, quality, bindType, accountBound)
-	if target then
-		return "routed", target, category
-	end
-	return "none"
+	previewCache[itemID] = { status, target, category }
+	return status, target, category
 end
 
 -- Diagnostics: print why a run would (or wouldn't) route. Works anywhere - it
@@ -1311,7 +1385,7 @@ function Engine.Debug()
 
 	local g = db.gold
 	local cur = GetMoney()
-	if issecret and issecret(cur) then
+	if F.IsSecret(cur) then
 		F.Print(L["Debug - gold value is secret right now (in combat?)."])
 	else
 		F.Print(L["Debug - gold enabled=%s target=%s known=%s self=%s | have %s, keep %s"], tostring(g.enabled), g.target ~= "" and g.target or "(none)", tostring(Roster.IsKnown(g.target)), tostring(g.target == me), F.Money(cur), F.Money(g.keepCopper))
@@ -1321,6 +1395,10 @@ end
 -- ---------------------------------------------------------------------------
 -- Mailbox lifecycle
 -- ---------------------------------------------------------------------------
+
+-- Live bag binding (and stack counts) can change what PreviewTarget would say,
+-- so drop the tooltip cache whenever bags settle.
+ns:RegisterEvent("BAG_UPDATE_DELAYED", Engine.WipePreviewCache)
 
 ns:RegisterEvent("MAIL_SHOW", function()
 	ns.State.mailboxOpen = true
@@ -1334,7 +1412,7 @@ ns:RegisterEvent("MAIL_SHOW", function()
 	end
 	ns:After(0.2, function()
 		if ns.State.mailboxOpen then
-			Engine.Run()
+			Engine.Run(true) -- auto-run: applies the cross-account alt gate
 		end
 	end)
 end)

@@ -106,7 +106,9 @@ C.ROUTE_ORDER = { "item", "boe", "boa", "quality" }
 C.CHAR_DEFAULTS = {
 	autoRun = false, -- OFF by default: mail transfers are irreversible
 	holdShiftToDisable = true, -- when autoRun is on, Shift skips a given open
+	confirmGold = true, -- ask before a run that moves >= confirmThreshold gold
 	confirmThreshold = 1000, -- gold value above which a send asks for confirmation
+	confirmItems = false, -- ask before any run that includes item attachments
 	tooltipHints = true, -- show "routes to X" on bag item tooltips
 
 	gold = {
@@ -167,6 +169,11 @@ C.GLOBAL_DEFAULTS = {
 	-- Per-character snapshots of specific item rules so another alt can merge
 	-- them later. key = "Name-Realm", value = { updatedAt, itemRules = { ... } }.
 	itemRuleSnapshots = {},
+
+	-- Manually whitelisted mail targets, account-wide. The WoW API can't see
+	-- characters on a *different* WoW account, so users add those alts here by
+	-- hand to pass the "known target" safety gate. key = "Name-Realm", value = true.
+	manualAlts = {},
 
 	-- Account-wide lifetime count of confirmed mails sent, surfaced in each mail's
 	-- subject line ("...#N"). Incremented only on MAIL_SEND_SUCCESS.

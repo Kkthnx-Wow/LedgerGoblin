@@ -20,8 +20,19 @@ local GetCoinTextureString = GetCoinTextureString
 local UnitName = UnitName
 local GetNormalizedRealmName = GetNormalizedRealmName
 local GetRealmName = GetRealmName
+local issecretvalue = _G["issecretvalue"]
 
 local COPPER_PER_GOLD = C.COPPER_PER_GOLD
+
+-- Midnight (12.0+) restricted values. Guard before arithmetic, concat, compare,
+-- or `#` on API returns that may be Secret in combat/instances. No-op on Classic.
+function F.IsSecret(v)
+	return issecretvalue and issecretvalue(v) or false
+end
+
+function F.NotSecret(v)
+	return not F.IsSecret(v)
+end
 
 -- Chat output prefix, built once. Two-tone to match the brand: gold "Ledger",
 -- green "Goblin".
