@@ -2,8 +2,8 @@
 ## Title: |cfff4c430Ledger|r|cff8fc02eGoblin|r
 ## Notes: A high-performance, event-driven mail routing system. Sends gold and items to your alts automatically, by rule. |n|n|cff5C8BCFDeveloper|cffffffff:|r |nJosh "|CFF7b8489Kkthnx|r" Russell|n|n|cff009cdePayPal|r|cffffffff:|r |n|cffffffffwww.paypal.me/KkthnxTV|r|n|n|cfff96854Patreon|r|cffffffff:|r |n|cffffffffwww.patreon.com/Kkthnx|r
 ## Author: Josh "|CFF7b8489Kkthnx|r" Russell
-## Version: 1.4.0
-## IconTexture: Interface\AddOns\LedgerGoblin\Media\Icon
+## Version: 1.4.1
+## IconTexture: 463874
 ## AddonCompartmentFunc: LedgerGoblin_OnAddonCompartmentClick
 ## AddonCompartmentFuncOnEnter: LedgerGoblin_OnAddonCompartmentEnter
 ## AddonCompartmentFuncOnLeave: LedgerGoblin_OnAddonCompartmentLeave

@@ -20,7 +20,7 @@ C.BrandRGB = { 0.957, 0.769, 0.188 } -- goblin gold as RGB (0-1), for textures
 C.GreenHex = "ff8fc02e" -- goblin green: the art's yellow-green hue, brightened so
 C.GreenRGB = { 0.561, 0.753, 0.180 } -- it reads clearly green next to the gold
 C.Title = "|c" .. C.BrandHex .. "Ledger|r|c" .. C.GreenHex .. "Goblin|r"
-C.Icon = "Interface\\AddOns\\LedgerGoblin\\Media\\Icon"
+C.Icon = 463874
 
 -- Blizzard's per-quality colour table; reused so our UI matches the game.
 C.QualityColors = _G["ITEM_QUALITY_COLORS"]
