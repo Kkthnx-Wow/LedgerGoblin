@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="LedgerGoblin/Media/Logo.png" alt="LedgerGoblin" width="160" height="160" />
-
 # LedgerGoblin
 
 **A high-performance, event-driven mail routing system — it sends gold and items to your alts automatically, by rule.**
@@ -9,6 +7,8 @@
 [![Last Commit](https://img.shields.io/github/last-commit/Kkthnx-Wow/LedgerGoblin?style=flat-square)](https://github.com/Kkthnx-Wow/LedgerGoblin/commits/main)
 [![Issues](https://img.shields.io/github/issues/Kkthnx-Wow/LedgerGoblin?style=flat-square)](https://github.com/Kkthnx-Wow/LedgerGoblin/issues)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+
+<img width="256" height="256" alt="LG256" src="https://github.com/user-attachments/assets/1017c470-60f7-4f68-8b15-93061af1a978" />
 
 </div>
 
