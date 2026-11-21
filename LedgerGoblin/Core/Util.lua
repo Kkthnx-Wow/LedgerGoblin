@@ -1,132 +1,183 @@
 --[[
 	LedgerGoblin - Util
 	-------------------------------------------------------------------------
-	Cached global references + small pure helpers. Per the performance brief:
-	every API we touch in a hot path (the bag scan / send loop) is localised
-	once here so the engine never pays a global lookup mid-scan.
+	Small pure helpers: printing, names, money parsing and formatting, schema
+	merging, secret-value guards.
 --]]
 
 local _, ns = ...
-local C, L, F = ns.C, ns.L, ns.F
+local C, F = ns.C, ns.F
 
--- Cached globals (hot-path). Keep these as upvalues for the helpers below.
 local format = string.format
 local floor = math.floor
 local tostring = tostring
-local type = type
 local tonumber = tonumber
+local type = type
+local pairs = pairs
+local select = select
+local date = date
+local tconcat = table.concat
 
-local GetCoinTextureString = GetCoinTextureString
 local UnitName = UnitName
 local GetNormalizedRealmName = GetNormalizedRealmName
 local GetRealmName = GetRealmName
 local issecretvalue = _G["issecretvalue"]
 
 local COPPER_PER_GOLD = C.COPPER_PER_GOLD
+local COPPER_PER_SILVER = C.COPPER_PER_SILVER
 
--- Midnight (12.0+) restricted values. Guard before arithmetic, concat, compare,
--- or `#` on API returns that may be Secret in combat/instances. No-op on Classic.
+-- Midnight restricted values. Never compare, add or concat one.
 function F.IsSecret(v)
-	return issecretvalue and issecretvalue(v) or false
+	return issecretvalue ~= nil and issecretvalue(v) or false
 end
 
 function F.NotSecret(v)
 	return not F.IsSecret(v)
 end
 
--- Chat output prefix, built once. Two-tone to match the brand: gold "Ledger",
--- green "Goblin".
-local PREFIX = "|c" .. C.BrandHex .. "Ledger|r|c" .. C.GreenHex .. "Goblin|r: "
+local PREFIX = C.Title .. ": "
 
 function F.Print(msg, ...)
 	if select("#", ...) > 0 then
 		msg = format(msg, ...)
 	end
-	-- DEFAULT_CHAT_FRAME is the canonical sink; AddMessage avoids the print()
-	-- tostring dance and keeps our colour escape intact.
 	DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. tostring(msg))
 end
 
--- "Name-Realm" for a unit, normalised so it matches what the roster stores.
--- Returns nil if the name isn't available yet (e.g. very early login).
+function F.Trim(s)
+	return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+-- The realm name without spaces, as it appears in "Name-Realm". Empty during
+-- the first frames of login, so it is not cached.
+function F.MyRealm()
+	if GetNormalizedRealmName then
+		local realm = GetNormalizedRealmName()
+		if realm and realm ~= "" then
+			return realm
+		end
+	end
+	if GetRealmName then
+		return (GetRealmName():gsub("%s+", ""))
+	end
+	return ""
+end
+
+-- Forever names are unique across the region and carry a surname. UnitName
+-- returns (first, surname), the full name joins them with a space, and the
+-- realm is never part of the address. Retail returns (name, realm) and mail
+-- uses Name-Realm. Asked each time, the answer is fixed per client.
+function F.UniqueNames()
+	local fn = _G["RegionalUniqueNamesEnabled"]
+	return fn ~= nil and fn() == true
+end
+
+local function SurnameSeparator()
+	local consts = _G["Constants"] and _G["Constants"].CharacterNameSeparatorConsts
+	return (consts and consts.CHARACTERNAME_SURNAME_SEPARATOR) or " "
+end
+
+-- The key a character is stored and mailed under. "First Surname" on
+-- Forever, "Name-Realm" on Retail.
 function F.FullName(unit)
-	unit = unit or "player"
-	local name, realm = UnitName(unit)
+	local name, second = UnitName(unit or "player")
 	if not name or name == "" then
 		return nil
 	end
-	if not realm or realm == "" then
-		realm = GetNormalizedRealmName and GetNormalizedRealmName() or (GetRealmName and GetRealmName():gsub("%s+", "")) or ""
+	if F.UniqueNames() then
+		if second and second ~= "" then
+			return name .. SurnameSeparator() .. second
+		end
+		return name
 	end
+	local realm = (second and second ~= "") and second or F.MyRealm()
 	if realm == "" then
 		return name
 	end
 	return name .. "-" .. realm
 end
 
--- Money formatting via Blizzard's coin string (icons). copper -> "1g 2s 3c".
-function F.Money(copper)
-	copper = copper or 0
-	if GetCoinTextureString then
-		return GetCoinTextureString(copper)
+-- Typed names become stored keys. Retail adds our realm to a bare name,
+-- Forever only tidies spaces. Returns nil for empty input.
+function F.NormalizeTarget(input)
+	if type(input) ~= "string" then
+		return nil
 	end
-	return floor(copper / COPPER_PER_GOLD) .. "g"
+	input = F.Trim(input):gsub("%s+", " ")
+	if input == "" then
+		return nil
+	end
+	if F.UniqueNames() then
+		return input
+	end
+	if not input:find("-", 1, true) then
+		local realm = F.MyRealm()
+		if realm ~= "" then
+			input = input .. "-" .. realm
+		end
+	end
+	return input
 end
 
-function F.GoldToCopper(gold)
-	return (tonumber(gold) or 0) * COPPER_PER_GOLD
+-- Retail same-realm mail addressed "Name-MyRealm" does not arrive and fires
+-- neither MAIL_SEND_SUCCESS nor MAIL_FAILED, so drop our own realm there.
+-- Forever keys are already the address.
+function F.MailRecipient(target)
+	if type(target) ~= "string" or target == "" or F.UniqueNames() then
+		return target
+	end
+	local name, realm = target:match("^(.-)%-(.+)$")
+	if not name then
+		return target
+	end
+	local myRealm = F.MyRealm()
+	if myRealm ~= "" and realm:lower() == myRealm:lower() then
+		return name
+	end
+	return target
 end
 
-function F.CopperToGold(copper)
-	return floor((copper or 0) / COPPER_PER_GOLD)
+-- Inbox senders: "Name" or "Name-Realm" on Retail, the full name on Forever.
+function F.SenderKey(sender)
+	if type(sender) ~= "string" or sender == "" then
+		return nil
+	end
+	if F.UniqueNames() or sender:find("-", 1, true) then
+		return sender
+	end
+	local realm = F.MyRealm()
+	return realm ~= "" and (sender .. "-" .. realm) or sender
 end
 
-local COPPER_PER_SILVER = C.COPPER_PER_SILVER
-
--- Parse a user-typed money string into copper. Accepts:
---   "100"            -> 100 gold (bare numbers are gold, the common case)
---   "100g 50s 20c"   -> full g/s/c, any subset, any order, spaces optional
---   "50s", "20c"     -> silver / copper only
--- Returns nil when the string contains no recognisable amount, so callers can
--- reject bad input instead of silently routing 0.
-function F.ParseMoney(text)
+-- Item ID from a number, a bare number string, an item link or "item:123".
+function F.ItemIDFromText(text)
 	if type(text) == "number" then
-		return floor(text)
+		return text
 	end
 	if type(text) ~= "string" then
 		return nil
 	end
-	text = text:lower():gsub(",", "")
-
-	local copper = 0
-	local matched = false
-	for amount, unit in text:gmatch("(%d+)%s*([gsc])") do
-		amount = tonumber(amount)
-		if amount then
-			matched = true
-			if unit == "g" then
-				copper = copper + amount * COPPER_PER_GOLD
-			elseif unit == "s" then
-				copper = copper + amount * COPPER_PER_SILVER
-			else
-				copper = copper + amount
-			end
-		end
-	end
-
-	if not matched then
-		-- No unit suffix: treat a bare number as gold.
-		local bare = tonumber((text:gsub("%s+", "")))
-		if bare then
-			return floor(bare * COPPER_PER_GOLD)
-		end
-		return nil
-	end
-
-	return copper
+	local id = text:match("|Hitem:(%d+)") or text:match("^item:(%d+)") or text:match("^%s*(%d+)%s*$")
+	return id and tonumber(id) or nil
 end
 
--- Plain "Ng Ms Kc" text (no icons) for edit boxes, where coin textures don't fit.
+-- The coin string moved to C_CurrencyInfo, and the old global is gone on
+-- current clients. GetMoneyString is FrameXML Lua, looked up at call time.
+local CoinString = (C_CurrencyInfo and C_CurrencyInfo.GetCoinTextureString) or _G["GetCoinTextureString"]
+
+function F.Money(copper)
+	copper = copper or 0
+	if CoinString then
+		return CoinString(copper)
+	end
+	local GetMoneyString = _G["GetMoneyString"]
+	if GetMoneyString then
+		return GetMoneyString(copper)
+	end
+	return F.MoneyText(copper)
+end
+
+-- Plain "1g 2s 3c" for edit boxes.
 function F.MoneyText(copper)
 	copper = copper or 0
 	local g = floor(copper / COPPER_PER_GOLD)
@@ -142,12 +193,45 @@ function F.MoneyText(copper)
 	if c > 0 or #parts == 0 then
 		parts[#parts + 1] = c .. "c"
 	end
-	return table.concat(parts, " ")
+	return tconcat(parts, " ")
 end
 
--- Deep-merge defaults into a saved table, repairing type mismatches. Lifted
--- from NexEnhance's CopyDefaults: a saved value whose type no longer matches
--- the default (schema drift across versions) is rebuilt from the default.
+-- "100" is 100 gold. "100g 50s 20c" in any order. nil when nothing parses, so
+-- bad input is rejected instead of becoming 0.
+function F.ParseMoney(text)
+	if type(text) == "number" then
+		return floor(text)
+	end
+	if type(text) ~= "string" then
+		return nil
+	end
+	text = text:lower():gsub(",", "")
+
+	local copper, matched = 0, false
+	for amount, unit in text:gmatch("(%d+)%s*([gsc])") do
+		amount = tonumber(amount)
+		matched = true
+		if unit == "g" then
+			copper = copper + amount * COPPER_PER_GOLD
+		elseif unit == "s" then
+			copper = copper + amount * COPPER_PER_SILVER
+		else
+			copper = copper + amount
+		end
+	end
+
+	if not matched then
+		local bare = tonumber((text:gsub("%s+", "")))
+		if bare and bare >= 0 then
+			return floor(bare * COPPER_PER_GOLD)
+		end
+		return nil
+	end
+	return copper
+end
+
+-- Deep-merge defaults into a saved table. A saved value whose type no longer
+-- matches its default is rebuilt from the default.
 function F.CopyDefaults(defaults, target)
 	if type(target) ~= "table" then
 		target = {}
@@ -162,47 +246,33 @@ function F.CopyDefaults(defaults, target)
 	return target
 end
 
--- Today's date key for analytics ("YYYY-MM-DD"), local time.
-function F.DateKey()
-	return date("%Y-%m-%d")
+function F.DateKey(when)
+	return date("%Y-%m-%d", when)
 end
 
--- Trim + normalise a user-typed character name to "Name-Realm" shape. If the
--- user omits a realm we assume the current one. Returns nil for empty input.
-function F.NormalizeTarget(input)
-	if type(input) ~= "string" then
-		return nil
+-- "5s", "3m", "2h", "4d" since a timestamp.
+function F.Ago(when)
+	local secs = time() - (when or 0)
+	if secs < 60 then
+		return format("%ds", secs)
+	elseif secs < 3600 then
+		return format("%dm", floor(secs / 60))
+	elseif secs < 86400 then
+		return format("%dh", floor(secs / 3600))
 	end
-	input = input:gsub("^%s+", ""):gsub("%s+$", "")
-	if input == "" then
-		return nil
-	end
-	if not input:find("-", 1, true) then
-		local realm = GetNormalizedRealmName and GetNormalizedRealmName() or (GetRealmName and GetRealmName():gsub("%s+", "")) or ""
-		if realm ~= "" then
-			input = input .. "-" .. realm
-		end
-	end
-	return input
+	return format("%dd", floor(secs / 86400))
 end
 
--- The recipient string to hand SendMail. We store targets as "Name-Realm" so
--- they stay unique across connected realms, but WoW *silently* drops same-realm
--- mail when you tack your OWN realm onto the name - local delivery wants a bare
--- "Name", and only connected/other realms want the "-Realm" suffix. So strip the
--- suffix when it's our own realm; the mail vanishing into the void with no
--- success/fail event is the symptom this exists to kill.
-function F.MailRecipient(target)
-	if type(target) ~= "string" or target == "" then
-		return target
+-- Days and hours until a timestamp, for expiry text.
+function F.Until(when)
+	local secs = (when or 0) - time()
+	if secs <= 0 then
+		return "0h"
 	end
-	local name, realm = target:match("^(.-)%-(.+)$")
-	if not name then
-		return target -- already a bare name, nothing to strip
+	local days = floor(secs / 86400)
+	local hours = floor((secs % 86400) / 3600)
+	if days > 0 then
+		return format("%dd %dh", days, hours)
 	end
-	local myRealm = (GetNormalizedRealmName and GetNormalizedRealmName()) or (GetRealmName and GetRealmName():gsub("%s+", "")) or ""
-	if myRealm ~= "" and realm:lower() == myRealm:lower() then
-		return name
-	end
-	return target
+	return format("%dh", hours)
 end

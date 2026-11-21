@@ -1,0 +1,27 @@
+# The addon lives in the LedgerGoblin subfolder. package-as names the zip
+# folder, and move-folders lifts the subfolder's files into it, which is also
+# how the packager finds LedgerGoblin.toc for the game versions.
+package-as: LedgerGoblin
+
+move-folders:
+    LedgerGoblin/LedgerGoblin: LedgerGoblin
+
+enable-nolib-creation: no
+
+# Repository furniture that has no business inside the addon folder. Media at
+# the root is the README art, the in-game icon lives in LedgerGoblin/Media.
+ignore:
+    - .github
+    - .gitignore
+    - .gitattributes
+    - Media
+    - tools
+    - README.md
+    - CHANGELOG.md
+    - LICENSE
+
+manual-changelog:
+    filename: CHANGELOG.md
+    markup-type: markdown
+
+license-output: LICENSE.txt

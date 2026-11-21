@@ -1,37 +1,46 @@
-## Interface: 120007, 11508, 20505, 50504
+## Interface: 120105, 16001
 ## Title: |cfff4c430Ledger|r|cff8fc02eGoblin|r
-## Notes: A high-performance, event-driven mail routing system. Sends gold and items to your alts automatically, by rule. |n|n|cff5C8BCFDeveloper|cffffffff:|r |nJosh "|CFF7b8489Kkthnx|r" Russell|n|n|cff009cdePayPal|r|cffffffff:|r |n|cffffffffwww.paypal.me/KkthnxTV|r|n|n|cfff96854Patreon|r|cffffffff:|r |n|cffffffffwww.patreon.com/Kkthnx|r
+## Notes: Mails gold and items to your alts by rule, collects your inbox by filter, and keeps a ledger of what moved. |n|n|cff5C8BCFDeveloper|cffffffff:|r |nJosh "|CFF7b8489Kkthnx|r" Russell|n|n|cff009cdePayPal|r|cffffffff:|r |n|cffffffffwww.paypal.me/KkthnxTV|r|n|n|cfff96854Patreon|r|cffffffff:|r |n|cffffffffwww.patreon.com/Kkthnx|r
 ## Author: Josh "|CFF7b8489Kkthnx|r" Russell
-## Version: 1.4.1
-## IconTexture: 463874
+## Version: 2.0.0
+## IconTexture: Interface\AddOns\LedgerGoblin\Media\Icon
 ## AddonCompartmentFunc: LedgerGoblin_OnAddonCompartmentClick
 ## AddonCompartmentFuncOnEnter: LedgerGoblin_OnAddonCompartmentEnter
 ## AddonCompartmentFuncOnLeave: LedgerGoblin_OnAddonCompartmentLeave
 ## SavedVariables: LedgerGoblinDB
 ## SavedVariablesPerCharacter: LedgerGoblinCharDB
 ## X-Category: Mail
-## X-Support: Midnight
+## X-Support: Midnight, Forever
 ## X-Curse-Project-ID: 1572684
 
-# ----------------------------------------------------------------------------
-# Core. Order matters: Init creates the namespace, then locales/constants/util
-# are consumed by the database, which must be ready before any module loads.
-# ----------------------------------------------------------------------------
+# Core. Init makes the namespace, DB must load before any module.
 Core\Init.lua
 Core\Locales.lua
 Core\Constants.lua
 Core\Util.lua
+Core\Events.lua
 Core\Widgets.lua
 Core\Widgets.xml
-Core\Events.lua
 Core\DB.lua
 
-# ----------------------------------------------------------------------------
-# Modules. Roster + Logger are passive services the Engine leans on; Config is
-# the user-facing panel and is loaded last so it can see everything.
-# ----------------------------------------------------------------------------
+# Services. Roster and Items first, the mail modules lean on both.
 Modules\Roster.lua
-Modules\Logger.lua
-Modules\Engine.lua
+Modules\Items.lua
+Modules\Rules.lua
+Modules\Planner.lua
+Modules\Ledger.lua
+Modules\Sender.lua
+Modules\Inbox.lua
+Modules\Attach.lua
 Modules\Tooltip.lua
-Modules\Config.lua
+
+# Interface
+UI\Common.lua
+UI\Popups.lua
+UI\RuleEditor.lua
+UI\Settings.lua
+UI\MailDesk.lua
+UI\Minimap.lua
+UI\Demo.lua
+UI\Guide.lua
+UI\Slash.lua

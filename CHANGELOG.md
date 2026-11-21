@@ -7,6 +7,89 @@ All notable changes to **LedgerGoblin** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-11-21
+
+A full rework. LedgerGoblin now handles both sides of the mailbox and runs on
+WoW Forever as well as Retail.
+
+### Added
+
+- **Forever support.** The TOC lists 16001 next to Retail 120105.
+- **Collect.** Takes inbox mail by filter (everything, gold only, auction mail
+  or mail from your alts), newest first and one command at a time. COD mail,
+  GM letters and pending sales are never touched. It stops taking items at a
+  free bag slot floor, leaves gold that would pass the cap, and refreshes the
+  inbox when the server holds more than the 50 shown. Optional auto-collect
+  on open runs before auto-send.
+- **Income ledger.** Gold taken from the inbox is recorded by source (auction
+  sales, refunds, your alts, other players) per character per day.
+  `/ledger income [days]`.
+- **Mail on every character.** Each inbox scan saves how much mail, gold and
+  items wait there and when the first one expires. A login warning lists
+  characters whose mail expires soon, and `/ledger alts` shows gold and mail
+  for every character.
+- **Item type routing.** Send whole item types, for example every herb to your
+  alchemist. Trade goods are offered per subtype.
+- **Restock routes.** An item route can carry a max. Only enough is sent for
+  the target to hold that many, counting its bags, bank, inbox and mail on the
+  way.
+- **Mail desk.** Send, Preview, Collect and Rules above the mailbox, with a
+  status line. Right-click Collect for a one-off filter.
+- **Recipient picker** beside the Send Mail "To" box, listing your characters
+  and recently mailed names.
+- **Alt-click attach.** On the Send Mail tab, alt-click a bag item to attach
+  every stack of it.
+- **Auction trades.** Each sale and purchase collected from the inbox is
+  recorded with item, count, price and the other player. `/ledger sales [days]`
+  shows totals per item and the latest trades.
+- **Items only filter** for Collect, which leaves the gold in the mail.
+- **Inbox refresh.** While the mailbox is open and the server holds more mail
+  than the 50 shown, the inbox refreshes every 15 seconds when the client
+  allows it.
+- **More recipients.** The + picker also lists online friends and guild
+  members.
+- **Options.** A chat line per collected sale, purchase, refund or gift, a
+  coin sound when collecting finishes, and one item type per mail.
+- **Guide.** A seven page walkthrough with small drawn examples of each part
+  of the addon. It opens once at the first login on the account and comes back
+  with `/ledger guide` or the button on the Rule Editor settings page.
+- **Rule Editor preview.** `/ledger demo` fills the editor with sample routes
+  and `/ledger demo off` puts yours back. Sending is blocked while it is on.
+- **New icon.** A goblin portrait for the addon list, minimap button and Rule
+  Editor, shipped as a 16 KB 64x64 TGA.
+- **Manual sends are tracked.** Mail you send to your alts with Blizzard's own
+  Send button is logged and counted as on its way too.
+
+### Fixed
+
+- **Postage.** Planned at 30 copper per attachment instead of 30 per mail, and
+  each mail is checked against the real `GetSendMailPrice()` before sending.
+- **Forever character names.** Forever names carry a surname and are unique
+  across the region, so characters are stored and mailed as "First Surname".
+  Earlier test builds keyed them "First-Surname", which is moved over at login.
+- **Money display.** Coin strings use `C_CurrencyInfo.GetCoinTextureString`,
+  the old global is gone on current clients and amounts showed as plain gold.
+- **Item counts.** The log and stats count items, not stacks.
+- **Repair reserve.** Holds back the highest repair bill seen, not the last
+  one.
+- **Rules that target the current character** are refused instead of skipped
+  at send time.
+
+### Changed
+
+- **Faster hovering.** The Send button tooltip and item tooltip hints read
+  cached results. Bags are scanned once per bag change instead of once per
+  hovered item.
+- **Settings.** Every route is one dropdown, None turns it off.
+- **Rule Editor.** Aligned Item, Goes to, Max and Keep columns, flat number
+  cells, faded rows for routes that are off, plain item names, a route count
+  and the full target on hover.
+- **Code layout.** The engine and the 2,400 line config file are split into
+  focused modules (Items, Rules, Planner, Sender, Inbox, Ledger and the UI
+  files). Saved settings carry over.
+- **Dropped Classic Era, TBC and Mists interfaces** from the TOC. They were
+  untested and their mail frames differ.
+
 ## [1.4.0] - 2026-06-16
 
 Cross-account support, safer confirmations, and hardening for patch 12.0.7.

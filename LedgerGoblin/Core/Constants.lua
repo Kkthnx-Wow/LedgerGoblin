@@ -1,41 +1,33 @@
 --[[
 	LedgerGoblin - Constants
 	-------------------------------------------------------------------------
-	Immutable lookup data: brand colour, quality + bind definitions, mail
-	limits, the routing-category priority pipeline, and the default per-character
-	/ account database shapes. Defaults live here so DB.lua has exactly one
-	schema to merge against.
-
-	Money is stored in copper everywhere (the game's native unit) so we never
-	lose silver/copper precision; the UI parses/formats g/s/c around it.
+	Lookup data and the saved-variable schema. Money is copper everywhere.
 --]]
 
 local _, ns = ...
 local C, L = ns.C, ns.L
 
--- Brand. Two-tone name: "Ledger" in goblin gold, "Goblin" in goblin-skin green
--- (sampled from the addon art). Hex strings are AARRGGBB (include alpha).
-C.BrandHex = "fff4c430" -- goblin gold
-C.BrandRGB = { 0.957, 0.769, 0.188 } -- goblin gold as RGB (0-1), for textures
-C.GreenHex = "ff8fc02e" -- goblin green: the art's yellow-green hue, brightened so
-C.GreenRGB = { 0.561, 0.753, 0.180 } -- it reads clearly green next to the gold
+-- Brand. "Ledger" in goblin gold, "Goblin" in goblin green.
+C.BrandHex = "fff4c430"
+C.BrandRGB = { 0.957, 0.769, 0.188 }
+C.GreenHex = "ff8fc02e"
+C.GreenRGB = { 0.561, 0.753, 0.180 }
 C.Title = "|c" .. C.BrandHex .. "Ledger|r|c" .. C.GreenHex .. "Goblin|r"
-C.Icon = 463874
+C.Icon = [[Interface\AddOns\LedgerGoblin\Media\Icon]] -- 64x64 TGA from the logo
 
--- Blizzard's per-quality colour table; reused so our UI matches the game.
 C.QualityColors = _G["ITEM_QUALITY_COLORS"]
 
--- Mail engine limits (Blizzard constants, with literal fallbacks so a missing
--- global never nils out the math).
+-- Mail limits. ATTACHMENTS_MAX_SEND is 12 and ATTACHMENTS_MAX_RECEIVE 16 in
+-- both the Retail and Forever MailFrame.lua.
 C.MAX_ATTACHMENTS = _G["ATTACHMENTS_MAX_SEND"] or 12
-C.MAIL_POSTAGE = 30 -- copper per mail, flat
+C.MAX_RECEIVE = _G["ATTACHMENTS_MAX_RECEIVE"] or 16
+-- Postage per attachment (minimum one) used only to plan ahead. The sender
+-- checks the real GetSendMailPrice() once a mail is staged.
+C.POSTAGE_PER_ITEM = 30
 C.COPPER_PER_GOLD = 10000
 C.COPPER_PER_SILVER = 100
 
--- Enum.ItemBind values (14th return of GetItemInfo). Hard-coded with the wiki
--- values so we don't depend on Enum being populated for items: 2 = Bind on
--- Equip; 7/8/9 = account/warband bound (mailable to your own alts even when the
--- bag reports them "bound"). 1 = Bind on Pickup (soulbound, never mailable).
+-- Enum.ItemBind values (14th return of GetItemInfo).
 C.BIND = {
 	NONE = 0,
 	ON_PICKUP = 1,
@@ -47,16 +39,13 @@ C.BIND = {
 	TO_BNET_ACCOUNT_UNTIL_EQUIP = 9,
 }
 
--- Account-bound (warband / legacy BoA) bind types: still mailable to same-account
--- characters. Used both by the BoA category and by the mailability gate.
+-- Account and warband binds can still go to same-account characters.
 C.ACCOUNT_BOUND = {
 	[C.BIND.TO_WOW_ACCOUNT] = true,
 	[C.BIND.TO_BNET_ACCOUNT] = true,
 	[C.BIND.TO_BNET_ACCOUNT_UNTIL_EQUIP] = true,
 }
 
--- Item qualities we route by. Order is the priority we present them in the UI.
--- `key` matches the per-quality rule table; `enum` is the Blizzard quality int.
 C.QUALITIES = {
 	{ key = "poor", enum = 0, label = L["Poor"] },
 	{ key = "common", enum = 1, label = L["Common"] },
@@ -65,63 +54,82 @@ C.QUALITIES = {
 	{ key = "epic", enum = 4, label = L["Epic"] },
 }
 
--- enum -> quality key, for fast lookup during the bag scan.
 C.QUALITY_BY_ENUM = {}
 for i = 1, #C.QUALITIES do
 	C.QUALITY_BY_ENUM[C.QUALITIES[i].enum] = C.QUALITIES[i].key
 end
 
--- Bind-based routing categories. Same { enabled, target } shape as qualities,
--- but matched on the item's bind type. Listed in UI/priority order.
 C.BINDS = {
 	{ key = "boe", label = L["Bind on Equip"] },
 	{ key = "boa", label = L["Account Bound (Warband)"] },
 }
 
--- Gold routing modes.
 C.GOLD_MODE = {
-	KEEP = "keep", -- keep N copper on this char, send the remainder
-	FIXED = "fixed", -- send exactly N copper
-	PERCENT = "percent", -- send N% of current gold
+	KEEP = "keep",
+	FIXED = "fixed",
+	PERCENT = "percent",
 }
 
--- ---------------------------------------------------------------------------
--- Routing category pipeline
---   The engine walks these in order and stops at the first that yields a target
---   for an item. This is the single source of truth for routing priority, so
---   adding a future category is a one-line change here + a classifier branch.
---     1. exclusions  (handled before the pipeline - never send)
---     2. item        specific itemID / name rules
---     3. boe         bind-on-equip gear
---     4. boa         account/warband-bound items
---     5. quality     catch-all by item quality
--- ---------------------------------------------------------------------------
-C.ROUTE_ORDER = { "item", "boe", "boa", "quality" }
+-- Item type routing. Trade goods are offered per subclass, the rest as a whole
+-- class. Names come from C_Item.GetItemClassInfo / GetItemSubClassInfo at run
+-- time, and an entry whose name the client can't resolve is not offered, so
+-- Forever and Retail each show only the types they really have.
+C.TRADEGOODS_CLASS = 7
+C.TRADEGOODS_MAX_SUBCLASS = 24
+C.WHOLE_CLASSES = { 3, 9, 8, 16, 17, 0 } -- gem, recipe, enhancement, glyph, battle pet, consumable
 
--- ---------------------------------------------------------------------------
--- Default databases
---   CHAR_DEFAULTS  -> LedgerGoblinCharDB  (this character's routing profile)
---   GLOBAL_DEFAULTS-> LedgerGoblinDB      (account-wide roster + history)
--- ---------------------------------------------------------------------------
+-- Key for a type rule. Subclass rules win over a whole-class rule.
+function C.TypeKey(classID, subClassID)
+	if subClassID then
+		return "c" .. classID .. "s" .. subClassID
+	end
+	return "c" .. classID
+end
+
+-- Routing pipeline, first match wins. Exclusions are checked before it.
+C.ROUTE_ORDER = { "item", "type", "boe", "boa", "quality" }
+
+-- Inbox collect filters.
+C.COLLECT = {
+	ALL = "all",
+	GOLD = "gold",
+	AUCTION = "auction",
+	ALTS = "alts",
+	ITEMS = "items",
+}
+
+-- Income sources recorded by the ledger.
+C.SOURCE = {
+	SALE = "sale", -- auction sold
+	REFUND = "refund", -- outbid or cancelled bid returned
+	ALT = "alt", -- one of your own characters
+	PLAYER = "player", -- anyone else
+	OTHER = "other", -- system mail, unknown sender
+}
+
+C.SCHEMA = 2
+
 C.CHAR_DEFAULTS = {
-	autoRun = false, -- OFF by default: mail transfers are irreversible
-	holdShiftToDisable = true, -- when autoRun is on, Shift skips a given open
-	confirmGold = true, -- ask before a run that moves >= confirmThreshold gold
-	confirmThreshold = 1000, -- gold value above which a send asks for confirmation
-	confirmItems = false, -- ask before any run that includes item attachments
-	tooltipHints = true, -- show "routes to X" on bag item tooltips
+	schema = C.SCHEMA,
+	autoRun = false, -- mail is irreversible, so off by default
+	holdShiftToDisable = true,
+	confirmGold = true,
+	confirmThreshold = 1000, -- gold
+	confirmItems = false,
+	tooltipHints = true,
+	altClickAttach = true, -- alt-click a bag item attaches every stack of it
+	sendIndividually = false, -- one item type per mail instead of mixing
 
 	gold = {
 		enabled = false,
-		target = "", -- "Name-Realm"
+		target = "",
 		mode = C.GOLD_MODE.KEEP,
-		keepCopper = 1000 * C.COPPER_PER_GOLD, -- keep this much (KEEP mode)
-		fixedCopper = 100 * C.COPPER_PER_GOLD, -- send this much (FIXED mode)
-		percent = 50, -- send this percent (PERCENT mode)
-		reserveForRepairs = true, -- never spend below the learned repair cost
+		keepCopper = 1000 * C.COPPER_PER_GOLD,
+		fixedCopper = 100 * C.COPPER_PER_GOLD,
+		percent = 50,
+		reserveForRepairs = true,
 	},
 
-	-- Per-quality routing. Each entry: { enabled, target }.
 	quality = {
 		poor = { enabled = false, target = "" },
 		common = { enabled = false, target = "" },
@@ -130,56 +138,72 @@ C.CHAR_DEFAULTS = {
 		epic = { enabled = false, target = "" },
 	},
 
-	-- Bind-based routing. Each entry: { enabled, target }.
 	bind = {
 		boe = { enabled = false, target = "" },
 		boa = { enabled = false, target = "" },
 	},
 
-	-- Specific-item rules, evaluated before category rules, in array order.
-	-- Each: { match = itemID(number) or name(string), target = "Name-Realm",
-	-- enabled = bool }. A nil `enabled` is treated as true (back-compat with
-	-- rules saved before the toggle existed).
+	-- C.TypeKey -> { enabled, target }. Entries appear when the settings panel
+	-- offers that type.
+	typeRules = {},
+
+	-- { match = itemID or name, target = "Name-Realm", enabled = bool }.
+	-- A nil enabled counts as true.
 	itemRules = {},
 
-	-- Items never to send, keyed by itemID. value = true.
-	exclusions = {},
+	exclusions = {}, -- itemID -> true
+	keep = {}, -- itemID -> count to keep in bags
 
-	-- "Keep at least N in bags" reserves, keyed by itemID. The engine sends the
-	-- surplus above N (splitting a stack when needed) and leaves N behind. Only
-	-- itemID-keyed; applies no matter which rule routes the item.
-	keep = {},
+	inbox = {
+		filter = C.COLLECT.ALL, -- what the Collect button takes
+		autoCollect = false, -- collect when the mailbox opens
+		freeSlots = 1, -- stop taking items with this many bag slots left
+		messages = false, -- a chat line per collected sale, purchase or gift
+		sound = false, -- a coin sound when collecting finishes
+	},
 }
 
 C.GLOBAL_DEFAULTS = {
-	-- Account roster cache. key = "Name-Realm", value = { class, faction, gold, lastSeen }.
+	schema = C.SCHEMA,
+
+	-- "Name-Realm" -> { class, faction, gold, lastSeen }
 	roster = {},
 
-	-- Learned repair cost per character (copper). Captured at vendors so the
-	-- repair reserve is real, not a flat guess. key = "Name-Realm".
+	-- "Name-Realm" -> highest repair bill seen at a vendor (copper)
 	repairCost = {},
 
-	-- Rolling transfer log (most recent last). Each: { time, target, copper, items }.
+	-- Ring log, newest last: { time, from, target, copper, items, postage }
 	log = {},
 	logMax = 200,
 
-	-- Per-day analytics. key = "YYYY-MM-DD", value = { [target] = { copper, items } }.
+	-- "YYYY-MM-DD" -> { [target] = { copper, items, postage } } for sends
 	analytics = {},
 
-	-- Per-character snapshots of specific item rules so another alt can merge
-	-- them later. key = "Name-Realm", value = { updatedAt, itemRules = { ... } }.
+	-- "YYYY-MM-DD" -> { [character] = { [source] = copper } } for inbox money
+	income = {},
+
+	-- Ring of auction trades seen in the inbox, newest last:
+	-- { time, char, kind = "sale"|"bought", item, count, copper, who }
+	trades = {},
+	tradesMax = 500,
+
+	-- "Name-Realm" -> { scanned, count, total, money, items, cod, expires,
+	-- incoming, incomingAt }. Filled on each inbox scan and on each send to an
+	-- own alt, so any character can see where mail is waiting or expiring.
+	mailbox = {},
+
+	-- Warn at login when mail on any character expires within this many days.
+	-- 0 turns the warning off.
+	expiryWarnDays = 3,
+
+	-- "Name-Realm" -> { [itemID] = count } across bags, bank and reagent bank,
+	-- refreshed as bags change. Restock rules read the target's entry.
+	inventory = {},
+
 	itemRuleSnapshots = {},
-
-	-- Manually whitelisted mail targets, account-wide. The WoW API can't see
-	-- characters on a *different* WoW account, so users add those alts here by
-	-- hand to pass the "known target" safety gate. key = "Name-Realm", value = true.
 	manualAlts = {},
-
-	-- Account-wide lifetime count of confirmed mails sent, surfaced in each mail's
-	-- subject line ("...#N"). Incremented only on MAIL_SEND_SUCCESS.
+	recent = {}, -- "Name-Realm" -> last time mailed
 	sendCount = 0,
-
-	-- Self-rolled minimap button: where it sits on the ring (degrees) and whether
-	-- it's hidden. Account-wide so the button lives in the same spot everywhere.
+	guideSeen = false, -- the guide opens once at the first login on the account
 	minimap = { angle = 215, hide = false },
 }
